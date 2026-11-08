@@ -1,8 +1,10 @@
-"""A small clickable panel shown while pinned: play / pause / step, time and population.
+"""A small clickable panel: step back, play, pause, step, faster and pin / unpin buttons,
+plus time, population, and the rule and speed. Shown both pinned and unpinned.
 
-The pinned wallpaper window ignores the mouse (clicks go through to the desktop), so the
-buttons live in their own little window, one level above the desktop icons: clickable,
-but still below every normal app window, like a desktop widget."""
+Pinned, the wallpaper window ignores the mouse (clicks go through to the desktop), so the
+panel is its own little window in the screen's top-left corner, one level above the
+desktop icons: clickable, but still below every normal app window, like a desktop widget.
+Unpinned, it's attached to the game window's top-left corner and moves along with it."""
 import ctypes
 import ctypes.util
 import importlib
@@ -14,13 +16,22 @@ Foundation = importlib.import_module("Foundation")
 NSButton, NSColor, NSScreen = AppKit.NSButton, AppKit.NSColor, AppKit.NSScreen
 NSMakeRect = AppKit.NSMakeRect
 
-W, H = 140, 84     # panel size in points
-MARGIN = 20        # gap to the screen's top-left corner (below the menu bar)
+MARGIN = 20        # gap to the screen's top-left corner (pinned), below the menu bar
+INSET = 12         # gap to the game window's top-left corner (unpinned)
+BUTTON_W, BUTTON_GAP = 28, 4
 BUTTONS = [        # (action, SF Symbol, fallback title, tooltip)
+    ("back", "backward.end", "◀❙", "Step back one generation"),
     ("run", "play", "▶", "Play"),
     ("hold", "pause", "❚❚", "Pause"),
-    ("step", "forward.end", "▶❙", "Step one generation"),
+    ("step", "forward.end", "❙▶", "Step one generation"),
+    ("faster", "forward", "▶▶", "Faster  (Option-click: slower)"),
+    ("wallpaper", "pin", "📌", "Pin to desktop"),
 ]
+UNPIN = ("pin.slash", "✕", "Unpin from desktop")
+LINES = 3          # Time, Population, rule and speed
+LINE_H = 18
+W = 8 + len(BUTTONS) * (BUTTON_W + BUTTON_GAP) - BUTTON_GAP + 8
+H = 8 + LINES * LINE_H + 6 + 26 + 6
 
 
 def _icon_level():
@@ -41,12 +52,15 @@ class _HudButton(NSButton):
 
 class _HudTarget(Foundation.NSObject):
     def clicked_(self, sender):
-        self.on_action(BUTTONS[sender.tag()][0])
+        action = BUTTONS[sender.tag()][0]
+        if action == "faster" and AppKit.NSEvent.modifierFlags() & AppKit.NSEventModifierFlagOption:
+            action = "slower"
+        self.on_action(action)
 
 
 class Hud:
-    """`on_action(name)` is called with "run", "hold" or "step" (on the main thread, while
-    SDL pumps events, like the global hotkeys)."""
+    """`on_action(name)` is called with "back", "run", "hold", "step", "faster", "slower"
+    or "wallpaper" (on the main thread, while SDL pumps events, like the global hotkeys)."""
 
     def __init__(self, on_action):
         self.panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -79,66 +93,95 @@ class Hud:
         self.target = _HudTarget.alloc().init()
         self.target.on_action = on_action
         white = NSColor.whiteColor()
-        self.buttons = []
-        for i, (_, symbol, title, tip) in enumerate(BUTTONS):
-            b = _HudButton.alloc().initWithFrame_(NSMakeRect(8 + i * 32, H - 32, 28, 26))
+        self.buttons = {}
+        for i, (action, symbol, title, tip) in enumerate(BUTTONS):
+            b = _HudButton.alloc().initWithFrame_(
+                NSMakeRect(8 + i * (BUTTON_W + BUTTON_GAP), H - 32, BUTTON_W, 26))
             b.setBordered_(False)
-            image = None
-            if hasattr(AppKit.NSImage, "imageWithSystemSymbolName_accessibilityDescription_"):
-                image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, tip)
-            if image is not None:
-                b.setImage_(image)
-                b.setImagePosition_(1)  # NSImageOnly
-                b.setTitle_("")
-            else:
-                b.setTitle_(title)
+            self._set_face(b, symbol, title, tip)
             if hasattr(b, "setContentTintColor_"):
                 b.setContentTintColor_(white)
-            b.setToolTip_(tip)
             b.setTag_(i)
             b.setTarget_(self.target)
             b.setAction_("clicked:")
             box.addSubview_(b)
-            self.buttons.append(b)
+            self.buttons[action] = b
 
-        font = AppKit.NSFont.monospacedDigitSystemFontOfSize_weight_(14, 0.0)
+        font = AppKit.NSFont.monospacedDigitSystemFontOfSize_weight_(13, 0.0)
         self.labels = []
-        for y in (28, 8):
+        for k in range(LINES):  # top to bottom
             label = AppKit.NSTextField.labelWithString_("")
-            label.setFrame_(NSMakeRect(10, y, W - 16, 20))
+            label.setFrame_(NSMakeRect(10, 8 + (LINES - 1 - k) * LINE_H, W - 16, LINE_H))
             label.setFont_(font)
             label.setTextColor_(white)
             box.addSubview_(label)
             self.labels.append(label)
-        self.shown = None  # what the panel shows: (time, population, paused)
+        self.shown = None     # what the panel shows
+        self.parent = None    # the game window, while attached to it (unpinned)
 
-    def place(self, screen=None):
-        """Put the panel in the top-left corner of `screen` (an NSScreen), below the menu bar."""
-        screen = screen or NSScreen.mainScreen()
-        if screen is None:
-            return
-        area = screen.visibleFrame()
-        self.panel.setFrameOrigin_((area.origin.x + MARGIN,
-                                    area.origin.y + area.size.height - MARGIN - H))
+    @staticmethod
+    def _set_face(button, symbol, title, tip):
+        image = None
+        if hasattr(AppKit.NSImage, "imageWithSystemSymbolName_accessibilityDescription_"):
+            image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, tip)
+        if image is not None:
+            button.setImage_(image)
+            button.setImagePosition_(1)  # NSImageOnly
+            button.setTitle_("")
+        else:
+            button.setTitle_(title)
+        button.setToolTip_(tip)
 
-    def show(self, screen=None):
-        self.place(screen)
+    def place(self, win, pinned):
+        """Pinned: the top-left corner of `win`'s screen, below the menu bar, above the
+        desktop icons. Unpinned: the top-left corner of `win` (the game window), riding
+        along with it as a child window."""
+        if pinned:
+            self._detach()
+            self.panel.setLevel_(_icon_level())
+            screen = win.screen() or NSScreen.mainScreen()
+            if screen is None:
+                return
+            area, margin = screen.visibleFrame(), MARGIN
+        else:
+            area, margin = win.frame(), INSET
+            self.panel.setLevel_(win.level())
+            if self.parent is not win:
+                self._detach()
+                win.addChildWindow_ordered_(self.panel, AppKit.NSWindowAbove)
+                self.parent = win
+        self.panel.setFrameOrigin_((area.origin.x + margin,
+                                    area.origin.y + area.size.height - margin - H))
+
+    def _detach(self):
+        if self.parent is not None:
+            self.parent.removeChildWindow_(self.panel)
+            self.parent = None
+
+    def show(self, win, pinned):
+        self.place(win, pinned)
         self.panel.orderFrontRegardless()
 
     def hide(self):
+        self._detach()
         self.panel.orderOut_(None)
 
-    def update(self, time, population, paused):
-        state = (time, population, paused)
+    def update(self, time, population, paused, status, pinned, can_back):
+        state = (time, population, paused, status, pinned, can_back)
         if state == self.shown:
             return
+        if self.shown is None or self.shown[4] != pinned:
+            self._set_face(self.buttons["wallpaper"], *(UNPIN if pinned else BUTTONS[-1][1:]))
         self.shown = state
         self.labels[0].setStringValue_(f"Time: {time}")
         self.labels[1].setStringValue_(f"Population: {population}")
-        self.buttons[0].setEnabled_(paused)       # play: only when paused
-        self.buttons[1].setEnabled_(not paused)   # pause: only when running
+        self.labels[2].setStringValue_(status)
+        self.buttons["back"].setEnabled_(can_back)
+        self.buttons["run"].setEnabled_(paused)        # play: only when paused
+        self.buttons["hold"].setEnabled_(not paused)   # pause: only when running
         self.panel.displayIfNeeded()  # the main thread sleeps between pumps: draw now
 
     def close(self):
+        self._detach()
         self.panel.orderOut_(None)
         self.panel.close()

@@ -6,16 +6,18 @@
 #   ./login.sh status      show whether it is installed / running, and its settings
 #
 # Change it without editing wall.sh (applies right away, and at every login):
-#   Ctrl+Shift+S           while it runs: pick colour and monitor in a small window (live)
+#   Ctrl+Shift+S           while it runs: pick colour, speed and monitor in a small window (live)
 #   ./login.sh             the same window from the terminal (same as: settings)
 #   ./login.sh color red   cell colour: multi, white, black, gray, red, orange, yellow,
-#                          green, cyan, blue, purple, pink, mauve, or a hex like ff8800
+#                          green, cyan, blue, purple, pink, mauve, or a hex like ff8800,
+#                          or a theme: heat, ocean, neon, forest, sunset, ice
+#   ./login.sh speed 4     outer generations per second (0.5, 1, 2, 4 ...)
 #   ./login.sh monitor 2   which monitor to cover (1 = the one with the menu bar)
 #   ./login.sh monitors    list the monitors and their numbers
 #   ./login.sh reset       forget those choices, use wall.sh's values again
 #
 # Everything else (opacity, zoom, ...) comes from wall.sh: edit that file, then
-# run  ./login.sh install  again. Colour/monitor choices made here are kept.
+# run  ./login.sh install  again. Colour/speed/monitor choices made here are kept.
 # Output and errors go to ~/Library/Logs/life-wallpaper.log
 #
 # Why it copies itself: macOS blocks programs started at login from reading
@@ -31,7 +33,7 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 APP="$HOME/Library/Application Support/life-wallpaper"
 WALL="$APP/wall.sh"
 PY="$APP/.venv-life/bin/python"
-SETTINGS="$APP/settings"   # lines like  color=red; wall.sh reads it and passes  --color red
+SETTINGS="$APP/settings"   # lines like  color=red, speed=4; wall.sh reads it and passes  --color red
 DOMAIN="gui/$(id -u)"
 FILES=("life inside life.py" "wall.sh" "requirements.txt")
 PACKAGE="lifeinlife"   # the code; copied whole, minus __pycache__
@@ -167,7 +169,16 @@ set_color() {
     echo "Colour set to $1 (running now, and at every login)."
 }
 
-# The same colour / monitor window as Ctrl+Shift+S (the dialog lives in lifeinlife/settings.py).
+set_speed() {
+    [[ "$1" =~ ^([0-9]+\.?[0-9]*|\.[0-9]+)$ ]] && awk "BEGIN{exit !($1 > 0)}" \
+        || { echo "Usage: $0 speed <generations per second, like 0.5, 2 or 8>"; exit 1; }
+    need_install
+    write_setting speed "$1"
+    restart
+    echo "Speed set to $1/s (running now, and at every login)."
+}
+
+# The same colour / speed / monitor window as Ctrl+Shift+S (the dialog lives in lifeinlife/settings.py).
 # Going through wall.sh means the dialog starts from the values in use right now.
 gui() {
     need_install
@@ -201,7 +212,7 @@ reset_settings() {
     need_install
     rm -f "$SETTINGS"
     restart
-    echo "Cleared: colour and monitor come from wall.sh again."
+    echo "Cleared: colour, speed and monitor come from wall.sh again."
 }
 
 uninstall() {
@@ -231,9 +242,10 @@ case "$1" in
     uninstall) uninstall ;;
     status)    status ;;
     color|colour) set_color "$2" ;;
+    speed)     set_speed "$2" ;;
     monitor)   set_monitor "$2" ;;
     monitors)  list_monitors ;;
     reset)     reset_settings ;;
     ""|settings|gui) gui ;;
-    *) echo "Usage: $0 [settings|install|uninstall|status|color <name>|monitor <n>|monitors|reset]"; exit 1 ;;
+    *) echo "Usage: $0 [settings|install|uninstall|status|color <name>|speed <n>|monitor <n>|monitors|reset]"; exit 1 ;;
 esac

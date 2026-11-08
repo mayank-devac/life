@@ -1,10 +1,12 @@
 """The app: window, input, actions and the main loop.
 
 The main loop is event-driven, not a fixed 30 fps spin:
-    - Zoomed out, the picture only changes when the outer world steps (every MACRO_EVERY
-      frames, ~0.5 s at 30 fps), so between steps it sleeps in pygame.event.wait() and
+    - Zoomed out, the picture only changes when the outer world steps (--speed times a
+      second, 2 by default), so between steps it sleeps in pygame.event.wait() and
       wakes up for input, a step, or a toast/help timer. About 2 wake-ups a second.
-    - Zoomed in, the inner worlds move every frame, so it wakes up every frame.
+      The inner worlds don't step at all then: nobody can see them.
+    - Zoomed in (or while a smooth zoom glides), the inner worlds on screen move every
+      frame, so it wakes up every frame.
     - While nobody can see the window (screen locked, display asleep) it stops
       simulating and drawing, and checks again once a second.
 Time is kept with a frame clock (`next_tick`), so the speed is the same either way.
@@ -15,17 +17,22 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 
+import numpy as np
 import pygame
 from pygame._sdl2.video import Renderer
 
-from . import settings
-from .colors import parse_color
-from .config import (CLEAR_BG, CLICK_SLOP, CLICKABLE_BG, HIDDEN_WAIT, MACRO_EVERY, MAX_WAIT, MONITOR_GRACE,
-                     PINNED_WAIT, SCREEN_POLL, SOLID_BG, SYSTEM_POLL)
+from . import patterns, settings
+from .colors import THEMES, parse_color
+from .config import (CLEAR_BG, CLICKABLE_BG, HIDDEN_WAIT, MAX_WAIT, MONITOR_GRACE, PINNED_WAIT,
+                     SAVE_DIR, SCREEN_POLL, SOLID_BG, SPEEDS, SYSTEM_POLL)
 from .render import Painter
+from .rules import next_preset, parse_rule
 from .view import View
 from .world import World
+
+BRUSH_NAMES = list(patterns.BRUSHES)
 
 # Ctrl+Shift + <key> -> action, while the window has focus.
 PYGAME_KEYS = {
@@ -35,6 +42,19 @@ PYGAME_KEYS = {
     pygame.K_SPACE: "pause",
     pygame.K_r: "reseed",
     pygame.K_s: "settings",
+    pygame.K_l: "rule",
+    pygame.K_i: "inner-rule",
+    pygame.K_e: "edges",
+    pygame.K_k: "theme",
+    pygame.K_f: "effects",
+    pygame.K_p: "brush",
+    pygame.K_t: "rotate",
+    pygame.K_c: "clear",
+    pygame.K_x: "save",
+    pygame.K_LEFT: "back",
+    pygame.K_RIGHT: "step",
+    pygame.K_COMMA: "slower",
+    pygame.K_PERIOD: "faster",
     pygame.K_UP: "opacity+",
     pygame.K_DOWN: "opacity-",
     pygame.K_EQUALS: "zoom+",
@@ -55,6 +75,8 @@ class LifeInLife:
         self.wallpaper_mode = args.wallpaper
         self.monitor = args.monitor
         self.color_name = args.color_name
+        # A single colour you picked (Ctrl+Shift+K cycles back to it after the themes)
+        self.base_color = args.color_name if args.color_name not in ("multi", *THEMES) else "white"
         self.dialog = None     # thread running the Ctrl+Shift+S settings dialog
         self.picked = queue.SimpleQueue()  # its answer, handed to the main loop thread-safely
         self.woken = threading.Event()     # set by that thread to cut a pinned / hidden sleep short
@@ -70,16 +92,16 @@ class LifeInLife:
         # Pixel size of the drawing area vs. window size in points (2.0 on Retina screens)
         px_w, px_h = self.renderer.get_viewport().size
         self.painter = Painter(self.renderer, px_w / size[0])
-        self.world = World(args.grid, args.color)
+        self.dt = 1 / max(1, args.fps)
+        self.world = World(args.grid, args.color, rule=args.rule, inner_rule=args.inner_rule,
+                           wrap=args.edges == "wrap", effects=not args.no_effects)
+        self.set_speed(args.speed)
         self.view = View(px_w, px_h, args.grid)
         self.view.zoom_at(args.zoom, px_w / 2, px_h / 2)  # start-up scale
 
         self.opacity = max(0.1, min(1.0, args.opacity))
         self.window.opacity = self.opacity
         self.bg_alpha = round(max(0.0, min(1.0, args.bg_opacity)) * 255)
-        self.dt = 1 / max(1, args.fps)
-        # Longest catch-up after a sleep; beyond that, time jumps instead of replaying frames.
-        self.max_catchup = MACRO_EVERY + math.ceil(MAX_WAIT / self.dt) + 1
         self.next_tick = time.monotonic()
 
         self.paused = False
@@ -87,11 +109,15 @@ class LifeInLife:
         self.show_help = not args.wallpaper
         self.help_until = time.monotonic() + 6  # start-up help fades away on its own
         self.toast_text, self.toast_until = "", 0.0
-        self.drag_mode = None  # None | "move" | "pan"
+        self.drag_mode = None  # None | "move" | "pan" | "paint"
         self.grab = (0, 0)     # where the window was grabbed, for "move"
-        self.dragged = 0.0     # how far (points) the mouse moved during this "pan"
+        self.paint_alive = True  # "paint": bring cells to life, or erase them
+        self.paint_last = None   # "paint": the last cell painted, to fill gaps on fast drags
+        self.mouse = None      # mouse position in points while it's over the window
+        self.brush = 0         # index into BRUSH_NAMES (Ctrl+Shift+P)
+        self.turns = 0         # quarter turns clockwise (Ctrl+Shift+T)
         self.hovered = False
-        self.pending = []      # actions coming from the global hotkeys
+        self.pending = []      # actions coming from the global hotkeys and the panel
 
         self.hidden = None     # why nobody can see the window, or None
         self.visibility = None
@@ -100,9 +126,9 @@ class LifeInLife:
         self.follow_monitor = False  # wallpaper mode: keep the window on the chosen monitor
         self.monitor_missing_since = None  # when the chosen monitor went away, or None
         self.placed = None  # (target frame, frame we actually got) after the last move
-        self.hud = None        # pinned: the clickable play / pause / step panel
+        self.hud = None        # the clickable step back / play / pause / step / speed / pin panel
         self.hud_error = None
-        self.hud_key = None    # (generation, paused, window frame) it last showed
+        self.hud_key = None    # what it last showed, and where
 
         # macOS: transparent background + wallpaper mode
         self.mac = None
@@ -122,8 +148,13 @@ class LifeInLife:
                 sys.exit(f"--wallpaper: {self.mac_error}")
             mac.pin(frame=self.screen_frame)
             self._start_global_hotkeys()
-            self._show_hud()
             self.follow_monitor = True
+        if sys.platform == "darwin" and self._get_mac() is not None:
+            self._show_hud()  # pinned or not: it has the pin / unpin button
+        if args.load:
+            if not self.load_file(args.load):
+                pygame.quit()
+                sys.exit(f"--load: {self.toast_text}")
         if self.mac is not None:
             try:
                 from .mac.visibility import Visibility  # noqa: PLC0415 - macOS only
@@ -182,29 +213,78 @@ class LifeInLife:
             print(f"Note: global shortcuts unavailable ({exc}); Ctrl+C in this terminal quits.")
 
     def _show_hud(self):
-        """Pinned: show the play / pause / step panel (clicks can't reach the wallpaper)."""
+        """Show the panel: step back / play / pause / step / faster / pin. Pinned, it's the
+        only way to click anything (clicks go through the wallpaper to the desktop)."""
         if self.hud is None and self.hud_error is None:
             try:
                 from .mac.hud import Hud  # noqa: PLC0415 - macOS only
                 self.hud = Hud(self._on_hotkey)  # clicks arrive like global hotkeys
             except Exception as exc:  # noqa: BLE001 - nice to have, never fatal
                 self.hud_error = exc
-                print(f"Note: can't show the play / pause panel ({exc}).")
+                print(f"Note: can't show the control panel ({exc}).")
         if self.hud is not None and self.mac is not None:
-            self.hud_key = None  # place and fill it on the next draw
-            self.hud.show(self.mac.win.screen())
+            self.hud_key = None  # fill it on the next draw
+            self.hud.show(self.mac.win, self.mac.pinned)
 
     def _update_hud(self):
-        if self.hud is None or self.mac is None or not self.mac.pinned:
+        if self.hud is None or self.mac is None:
             return
-        frame = self._frame_key(self.mac.frame())
-        key = (self.world.generation, self.paused, frame)
+        pinned = self.mac.pinned
+        place = (self._frame_key(self.mac.frame()), pinned)
+        key = (self.world.generation, self.paused, self.status, self.world.can_step_back, place)
         if key == self.hud_key:
             return
-        if self.hud_key is None or self.hud_key[2] != frame:
-            self.hud.place(self.mac.win.screen())  # the wallpaper moved to another monitor
+        if self.hud_key is None or self.hud_key[-1] != place:
+            self.hud.place(self.mac.win, pinned)  # moved to another monitor, or (un)pinned
         self.hud_key = key
-        self.hud.update(self.world.age, self.world.population, self.paused)
+        self.hud.update(self.world.age, self.world.population, self.paused, self.status,
+                        pinned, self.world.can_step_back)
+
+    @property
+    def help_top(self):
+        """Pixels to move the help panel down so the (unpinned) control panel doesn't hide it."""
+        if self.hud is None or self.pinned:
+            return 0
+        from .mac.hud import H, INSET  # noqa: PLC0415 - only reached with a panel, so on macOS
+        return round((INSET + H) * self.dpr)
+
+    @property
+    def max_catchup(self):
+        """Longest catch-up after a sleep; beyond that, time jumps instead of replaying frames."""
+        return self.world.macro_every + math.ceil(MAX_WAIT / self.dt) + 1
+
+    def set_speed(self, speed):
+        """Outer generations per second. It steps every so many frames, so the speed you
+        get is the nearest one the frame rate allows."""
+        self.world.macro_every = max(1, round(1 / (self.dt * speed)))
+        self.speed = speed
+
+    def change_speed(self, faster):
+        """The next speed up (or down) from SPEEDS, wrapping round at either end, so the
+        panel's one "faster" button reaches them all. Saved for the wallpaper."""
+        choices = [s for s in SPEEDS if s <= 1 / self.dt] or [1 / self.dt]
+        if faster:
+            bigger = [s for s in choices if s > self.speed + 1e-9]
+            speed = bigger[0] if bigger else choices[0]
+        else:
+            smaller = [s for s in choices if s < self.speed - 1e-9]
+            speed = smaller[-1] if smaller else choices[-1]
+        self.set_speed(speed)
+        text = settings.speed_text(speed)
+        self.toast(f"Speed {text} generation{'' if text == '1' else 's'} / second")
+        if self.wallpaper_mode:
+            try:
+                settings.save(speed=text)
+            except OSError:
+                pass  # applied anyway, just not remembered
+
+    @property
+    def status(self):
+        """Rule and speed, for the pinned panel: "Conway  2/s"."""
+        rule = self.world.rule.name
+        if self.world.inner_rule != self.world.rule:
+            rule += f" / {self.world.inner_rule.name}"
+        return f"{rule}  {settings.speed_text(self.speed)}/s"
 
     @property
     def pinned(self):
@@ -241,9 +321,32 @@ class LifeInLife:
             self.paused = True
             for _ in range(self.world.frames_to_macro_step() + 1):
                 self._step_world()
+        elif action == "back":  # pause, then go back one generation (or hand-made change)
+            self.paused = True
+            if self.world.step_back():
+                self.toast(f"Back to time {self.world.age}  ({len(self.world.rewind)} more)", 1.2)
+            else:
+                self.toast("Can't go back any further")
+        elif action in ("faster", "slower"):
+            self.change_speed(action == "faster")
         elif action == "reseed":
+            self.world.checkpoint()  # step back undoes it
             self.world.reseed()
             self.toast("New world")
+        elif action == "clear":
+            self.world.checkpoint()
+            self.world.clear()
+            self.toast("Cleared  -  click or drag to draw, Ctrl+Shift+P for patterns", 3)
+        elif action == "brush":
+            self.brush = (self.brush + 1) % len(BRUSH_NAMES)
+            self.turns = 0
+            self.toast(f"Brush: {BRUSH_NAMES[self.brush]}"
+                       + ("  -  click to place, Ctrl+Shift+T rotates" if self.brush else ""), 2.5)
+        elif action == "rotate":
+            self.turns = (self.turns + 1) % 4
+            self.toast(f"Brush: {BRUSH_NAMES[self.brush]}, turned {self.turns * 90}°")
+        elif action == "save":
+            self.save_world()
         elif action == "help":
             self.show_help = not self.show_help
             self.help_until = math.inf
@@ -253,7 +356,30 @@ class LifeInLife:
             self.window.opacity = self.opacity
             self.toast(f"Opacity {round(self.opacity * 100)}%")
         elif action in ("zoom+", "zoom-"):
-            self.view.zoom_at(1.25 if action == "zoom+" else 0.8, self.view.w / 2, self.view.h / 2)
+            self.view.zoom_smooth(1.25 if action == "zoom+" else 0.8, self.view.w / 2, self.view.h / 2)
+        elif action == "rule":
+            self.world.set_rule(rule=next_preset(self.world.rule))
+            r = self.world.rule
+            self.toast(f"Rule: {r.name}  ({r.notation})", 2.5)
+        elif action == "inner-rule":
+            self.world.set_rule(inner_rule=next_preset(self.world.inner_rule))
+            r = self.world.inner_rule
+            self.toast(f"Inner rule: {r.name}  ({r.notation})", 2.5)
+        elif action == "edges":
+            self.world.set_rule(wrap=not self.world.wrap)
+            self.toast("Edges wrap around" if self.world.wrap else "Edges are dead")
+        elif action == "theme":
+            # multi -> each theme -> the colour you started with (if it's one colour) -> multi
+            cycle = ["multi", *THEMES]
+            if self.color_name not in cycle:
+                cycle.append(self.base_color)
+            i = cycle.index(self.color_name) if self.color_name in cycle else -1
+            self.color_name = cycle[(i + 1) % len(cycle)]
+            self.world.set_color(parse_color(self.color_name))
+            self.toast(f"Colour: {self.color_name}")
+        elif action == "effects":
+            self.world.set_effects(not self.world.effects)
+            self.toast("Effects on" if self.world.effects else "Effects off")
         elif action == "wallpaper":
             self.toggle_wallpaper()
         elif action == "settings":
@@ -264,7 +390,7 @@ class LifeInLife:
         until it's answered) so the wallpaper keeps going meanwhile."""
         if self.dialog is not None and self.dialog.is_alive():
             return  # already open
-        color, monitor = self.color_name, self.monitor
+        color, monitor, speed = self.color_name, self.monitor, self.speed
         self.toast("Opening settings…", 3)  # osascript takes a moment to show the window
 
         def tell(kind, value):
@@ -276,7 +402,7 @@ class LifeInLife:
                 pass  # still seen on the next wake-up, at most MAX_WAIT later
 
         def ask():
-            picked = settings.choose(color, monitor, progress=lambda text: tell("toast", text))
+            picked = settings.choose(color, monitor, speed, progress=lambda text: tell("toast", text))
             if picked is None:
                 tell("toast", None)  # cancelled
             else:
@@ -285,10 +411,13 @@ class LifeInLife:
         self.dialog = threading.Thread(target=ask, name="settings-dialog", daemon=True)
         self.dialog.start()
 
-    def apply_settings(self, color_name, monitor):
+    def apply_settings(self, color_name, speed, monitor):
         """Apply a choice from the dialog right away, and save it for the next start."""
         self.world.set_color(parse_color(color_name))  # the dialog already checked it
         self.color_name = color_name
+        if color_name not in ("multi", *THEMES):
+            self.base_color = color_name
+        self.set_speed(min(speed, 1 / self.dt))
         self.monitor = monitor
         if self.wallpaper_mode and self.mac is not None:
             # Cover the chosen monitor, pinned or not, even if it's the one already chosen:
@@ -301,10 +430,78 @@ class LifeInLife:
                 self._cover(target, force=True)
         self.painter.invalidate()
         try:
-            settings.save(color=color_name, monitor=monitor)
-            self.toast(f"Colour {color_name}  -  monitor {monitor}", 2.5)
+            speed_text = settings.speed_text(self.speed)
+            settings.save(color=color_name, speed=speed_text, monitor=monitor)
+            self.toast(f"Colour {color_name}  -  {speed_text}/s  -  monitor {monitor}", 2.5)
         except OSError as exc:
             self.toast(f"Applied, but couldn't save it ({exc.strerror})", 3.5)
+
+    # ---- brushes, saving and loading
+    def brush_pattern(self):
+        return patterns.rotated(patterns.BRUSHES[BRUSH_NAMES[self.brush]], self.turns)
+
+    def _brush_cells(self):
+        """Cells the brush would cover at the mouse, for the preview: ((row, col), ...)."""
+        if not self.brush or self.mouse is None or self.pinned or self.drag_mode is not None:
+            return None
+        cell = self.view.cell_at(self.mouse[0] * self.dpr, self.mouse[1] * self.dpr)
+        if cell is None:
+            return None
+        pattern = self.brush_pattern()
+        pr, pc = np.nonzero(pattern)
+        size = self.world.size
+        rows = (pr + cell[0] - pattern.shape[0] // 2)
+        cols = (pc + cell[1] - pattern.shape[1] // 2)
+        if self.world.wrap:
+            rows, cols = rows % size, cols % size
+        return tuple(zip(rows.tolist(), cols.tolist()))
+
+    def _paint_to(self, cell):
+        """Paint (or erase) every cell on the line from the last painted one to `cell`."""
+        last = self.paint_last or cell
+        n = max(abs(cell[0] - last[0]), abs(cell[1] - last[1]))
+        t = np.linspace(0, 1, n + 1)
+        rows = np.rint(last[0] + (cell[0] - last[0]) * t).astype(int)
+        cols = np.rint(last[1] + (cell[1] - last[1]) * t).astype(int)
+        self.world.set_cells(rows, cols, self.paint_alive)
+        self.paint_last = cell
+
+    def save_world(self):
+        """Save the whole world as .rle in SAVE_DIR (the grid's full size, so loading it
+        puts every cell back where it was)."""
+        folder = Path(SAVE_DIR).expanduser()
+        name = time.strftime("world-%Y%m%d-%H%M%S")
+        path = folder / f"{name}.rle"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_text(patterns.to_rle(self.world.macro, self.world.rule.notation,
+                                            name=f"Life in Life {name}"))
+        except OSError as exc:
+            self.toast(f"Couldn't save ({exc.strerror})", 3.5)
+            return
+        print(f"Saved {path}", flush=True)
+        self.toast(f"Saved {SAVE_DIR}/{path.name}", 3)
+
+    def load_file(self, path):
+        """Load a .rle / .cells pattern as the whole world. Returns False (and shows why) if
+        it couldn't."""
+        try:
+            grid, rule = patterns.load(path)
+        except (OSError, ValueError) as exc:
+            self.toast(f"Can't load {Path(path).name}: {getattr(exc, 'strerror', None) or exc}", 4)
+            return False
+        self.world.checkpoint()  # step back undoes it
+        cropped = self.world.load(grid)
+        note = ""
+        if rule:
+            try:
+                self.world.set_rule(rule=parse_rule(rule))
+            except ValueError:
+                note = f"  (rule {rule} not supported: kept {self.world.rule.name})"
+        if cropped:
+            note += f"  (cropped to {self.world.size}x{self.world.size})"
+        self.toast(f"Loaded {Path(path).name}{note}", 3.5)
+        return True
 
     def toggle_wallpaper(self):
         mac = self._get_mac()
@@ -315,8 +512,7 @@ class LifeInLife:
         if mac.pinned:
             mac.unpin()
             mac.unwatch_hotkeys()
-            if self.hud is not None:
-                self.hud.hide()
+            self._show_hud()  # back onto the window's corner
             self.toast("Interactive  -  Ctrl+Shift+W to pin again", 2.5)
         else:
             mac.pin()
@@ -339,39 +535,56 @@ class LifeInLife:
             elif not chord and event.key in PYGAME_KEYS:
                 self.toast("Shortcuts use Ctrl+Shift  -  Ctrl+Shift+H for help", 2.5)
 
-        elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 2, 3):
             mods = pygame.key.get_mods()
             if (mods & pygame.KMOD_CTRL) and (mods & pygame.KMOD_SHIFT):
                 # Remember where we grabbed; moving the window by event.rel jitters because
                 # the window moving under the cursor feeds back into the next rel.
                 self.drag_mode, self.grab = "move", event.pos
-            elif event.button == 1:
-                self.drag_mode, self.dragged = "pan", 0.0
-
-        elif event.type == pygame.MOUSEBUTTONUP and event.button in (1, 3):
-            # A press that (almost) didn't move is a click, not a pan: toggle that cell.
-            if event.button == 1 and self.drag_mode == "pan" and self.dragged < CLICK_SLOP:
+            elif event.button != 1 or mods & pygame.KMOD_ALT:
+                self.drag_mode = "pan"  # right / middle drag, or Option + drag
+            else:
                 cell = self.view.cell_at(event.pos[0] * self.dpr, event.pos[1] * self.dpr)
-                if cell is not None:
-                    self.world.toggle(*cell)
+                if cell is None:
+                    return
+                self.world.checkpoint()  # step back undoes the whole stroke / stamp
+                if self.brush:
+                    self.world.stamp(self.brush_pattern(), *cell)
+                else:
+                    # Starting on a live cell erases, on a dead one draws, for the whole drag.
+                    self.paint_alive = not self.world.macro[cell]
+                    self.paint_last = None
+                    self.drag_mode = "paint"
+                    self._paint_to(cell)
+
+        elif event.type == pygame.MOUSEBUTTONUP and event.button in (1, 2, 3):
             self.drag_mode = None
 
-        elif event.type == pygame.MOUSEMOTION and self.drag_mode == "move":
-            wx, wy = self.window.position
-            self.window.position = (wx + event.pos[0] - self.grab[0], wy + event.pos[1] - self.grab[1])
+        elif event.type == pygame.MOUSEMOTION:
+            self.mouse = event.pos
+            if self.drag_mode == "move":
+                wx, wy = self.window.position
+                self.window.position = (wx + event.pos[0] - self.grab[0],
+                                        wy + event.pos[1] - self.grab[1])
+            elif self.drag_mode == "pan":
+                self.view.pan(event.rel[0] * self.dpr, event.rel[1] * self.dpr)
+            elif self.drag_mode == "paint":
+                cell = self.view.cell_at(event.pos[0] * self.dpr, event.pos[1] * self.dpr)
+                if cell is not None:
+                    self._paint_to(cell)
 
-        elif event.type == pygame.MOUSEMOTION and self.drag_mode == "pan":
-            self.dragged += abs(event.rel[0]) + abs(event.rel[1])
-            self.view.pan(event.rel[0] * self.dpr, event.rel[1] * self.dpr)
+        elif event.type == pygame.DROPFILE:  # a pattern file dropped onto the window
+            self.load_file(event.file)
 
         elif event.type == pygame.MOUSEWHEEL:
             mx, my = pygame.mouse.get_pos()
-            self.view.zoom_at(1.12 ** event.precise_y, mx * self.dpr, my * self.dpr)
+            self.view.zoom_smooth(1.12 ** event.precise_y, mx * self.dpr, my * self.dpr)
 
         elif event.type == pygame.WINDOWENTER:
             self.hovered = True
         elif event.type == pygame.WINDOWLEAVE:
             self.hovered = False
+            self.mouse = None  # hide the brush preview
         elif event.type == pygame.WINDOWFOCUSLOST:
             self.drag_mode = None  # don't get stuck dragging if the button-up happened elsewhere
         elif event.type in SIZE_EVENTS:
@@ -458,7 +671,9 @@ class LifeInLife:
             self._step_world()
 
     def _step_world(self):
-        if self.world.step():
+        # Inner worlds only step while they're on screen.
+        region = self.view.visible_cells() if Painter.animates(self.view) else None
+        if self.world.step(region):
             self.toast("World settled  -  starting a new one")
 
     def _background(self):
@@ -476,13 +691,15 @@ class LifeInLife:
         if self.transparent and self.mac is not None and self.mac.keep_transparent():
             self.painter.invalidate()
         self.painter.draw(self.world, self.view, self._background(), show_help=self.show_help,
-                          toast=toast, outline=self.transparent and self.hovered and not self.pinned)
+                          toast=toast, outline=self.transparent and self.hovered and not self.pinned,
+                          brush=self._brush_cells(), help_top=self.help_top)
         self._update_hud()
 
     def _advance(self, now):
         """Run every frame that is due by `now` (several after a sleep)."""
         steps = 0
         while now >= self.next_tick and steps < self.max_catchup:
+            self.view.ease(self.dt)
             self.update()
             self.next_tick += self.dt
             steps += 1
@@ -494,7 +711,9 @@ class LifeInLife:
         if self.hidden:
             return HIDDEN_WAIT
         wait = MAX_WAIT
-        if not self.paused:
+        if self.view.easing:
+            wait = self.next_tick - now  # gliding to a new zoom: every frame matters
+        elif not self.paused:
             if Painter.animates(self.view):
                 wait = self.next_tick - now  # inner worlds visible: every frame matters
             else:

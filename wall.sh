@@ -2,7 +2,7 @@
 # Run Life in Life as a live wallpaper over your macOS desktop picture.
 # Edit the values below, then run:  ./wall.sh
 # Stop it with Ctrl+C here, or Ctrl+Shift+Esc. Ctrl+Shift+W unpins it so the other shortcuts work.
-# Ctrl+Shift+S picks colour and monitor in a small window, live (and remembers it).
+# Ctrl+Shift+S picks colour, speed and monitor in a small window, live (and remembers it).
 # To start it at every login, see login.sh.
 
 # Background darkness behind the cells: 0 = fully clear (your wallpaper shows), 1 = solid black
@@ -19,11 +19,25 @@ ZOOM=1
 # World size: how many cells across. Fewer = bigger cells and bigger patterns.
 GRID=144
 
-# Frames per second. This also sets the speed: the outer world steps once every 15 frames.
+# Frames per second: how smooth zooming and the inner worlds are.
 FPS=30
 
-# Cell colour: multi (every cell its own colour), or one colour for all cells:
-# white, black, gray, red, orange, yellow, green, cyan, blue, purple, pink, mauve, or a hex like #ff8800
+# Speed: outer generations per second (0.5, 1, 2, 4, 8 ... at most FPS).
+SPEED=2
+
+# Rules: conway, highlife, daynight, seeds, maze, lifewithoutdeath, morley, diamoeba,
+# or B/S notation like B36/S23. INNER_RULE is for the little worlds inside each cell.
+RULE=conway
+INNER_RULE=conway
+
+# Edges of the world: wrap (around, like a donut) or dead (nothing beyond them).
+EDGES=wrap
+
+# Fading trails, age glow and birth flashes: 1 = on, 0 = off.
+EFFECTS=1
+
+# Cell colour: multi (every cell its own colour), a theme (heat, ocean, neon, forest,
+# sunset, ice: like multi, but along that gradient), or one colour for all cells: white, black, gray, red, orange, yellow, green, cyan, blue, purple, pink, mauve, or a hex like #ff8800
 COLOR=red
 
 # Which monitor to cover: 1 = primary (the one with the menu bar), 2 = second, 3 = third ...
@@ -39,14 +53,17 @@ if [ -n "$LIFE_LOG" ] && [ -f "$LIFE_LOG" ] && [ "$(stat -f %z "$LIFE_LOG")" -gt
     rm -f "$LIFE_LOG.tmp"
 fi
 
-# Colour / monitor picked with Ctrl+Shift+S (or ./login.sh) are saved in ./settings and
+# Colour / speed / monitor picked with Ctrl+Shift+S (or ./login.sh) are saved in ./settings and
 # passed after the values above, so they win. ./login.sh reset (or deleting it) undoes that.
 SAVED=()
 if [ -f settings ]; then
     while IFS='=' read -r key value; do
-        case "$key" in color|monitor) [ -n "$value" ] && SAVED+=("--$key" "$value") ;; esac
+        case "$key" in color|speed|monitor) [ -n "$value" ] && SAVED+=("--$key" "$value") ;; esac
     done < settings
 fi
+
+EXTRA=()
+[ "$EFFECTS" = 0 ] && EXTRA+=(--no-effects)
 
 PYTHON=".venv-life/bin/python"
 [ -x "$PYTHON" ] || PYTHON="python3"
@@ -57,7 +74,12 @@ exec "$PYTHON" "life inside life.py" --wallpaper \
     --zoom "$ZOOM" \
     --grid "$GRID" \
     --fps "$FPS" \
+    --speed "$SPEED" \
+    --rule "$RULE" \
+    --inner-rule "$INNER_RULE" \
+    --edges "$EDGES" \
     --color "$COLOR" \
     --monitor "$MONITOR" \
+    "${EXTRA[@]}" \
     "${SAVED[@]}" \
     "$@"

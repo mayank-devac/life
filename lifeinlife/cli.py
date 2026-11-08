@@ -1,8 +1,10 @@
 """Command-line arguments and main()."""
 import argparse
 
-from .colors import NAMED_COLORS, parse_color
-from .config import DEFAULT_GRID, DETAIL_ZOOM, HELP, MAX_ZOOM, MIN_GRID, MIN_ZOOM
+from .colors import NAMED_COLORS, THEMES, parse_color
+from .config import DEFAULT_GRID, DEFAULT_SPEED, DETAIL_ZOOM, HELP, MAX_ZOOM, MIN_GRID, MIN_ZOOM
+from .rules import PRESETS, parse_rule
+from .settings import parse_speed
 
 
 def parse_args(argv=None):
@@ -30,20 +32,43 @@ def parse_args(argv=None):
     p.add_argument("--grid", type=int, default=DEFAULT_GRID,
                    help=f"cells across the world (default {DEFAULT_GRID}, min {MIN_GRID}); "
                         f"fewer = bigger cells")
-    p.add_argument("--fps", type=int, default=30, help="frames per second (default 30)")
+    p.add_argument("--fps", type=int, default=30,
+                   help="frames per second (default 30): how smooth zooming and the inner worlds are")
+    p.add_argument("--speed", default=str(DEFAULT_SPEED),
+                   help=f"outer generations per second (default {DEFAULT_SPEED:g}, at most --fps)")
+    p.add_argument("--rule", default="conway",
+                   help=f"outer world's rule: {', '.join(PRESETS)}, or B/S notation like B36/S23")
+    p.add_argument("--inner-rule", default="conway", help="the inner worlds' rule (same choices)")
+    p.add_argument("--edges", choices=("wrap", "dead"), default="wrap",
+                   help="wrap: the outer edges wrap around (default); dead: beyond them is empty")
+    p.add_argument("--no-effects", action="store_true",
+                   help="no fading trails, age glow or birth flashes (Ctrl+Shift+F toggles them)")
     p.add_argument("--color", default="multi",
-                   help=f"cell colour: multi (default, every cell its own hue), "
-                        f"{', '.join(NAMED_COLORS)}, or a hex like #ff8800")
+                   help=f"cell colour: multi (default, every cell its own hue), a theme "
+                        f"({', '.join(THEMES)}), {', '.join(NAMED_COLORS)}, or a hex like #ff8800")
+    p.add_argument("--load", metavar="FILE",
+                   help="start from a pattern file (.rle, or .cells) instead of a random world; "
+                        "you can also drop one onto the window")
     p.add_argument("--settings", action="store_true",
-                   help="open the colour / monitor picker, save the choice for wall.sh, then exit "
-                        "(Ctrl+Shift+S does the same while it runs)")
+                   help="open the colour / speed / monitor picker, save the choice for wall.sh, "
+                        "then exit (Ctrl+Shift+S does the same while it runs)")
     args = p.parse_args(argv)
     args.grid = max(MIN_GRID, args.grid)
+    args.fps = max(1, args.fps)
     args.color_name = args.color  # the text, to show and save; args.color is the parsed value
     try:
         args.color = parse_color(args.color)
     except argparse.ArgumentTypeError as exc:
         p.error(f"argument --color: {exc}")
+    for name in ("rule", "inner_rule"):
+        try:
+            setattr(args, name, parse_rule(getattr(args, name)))
+        except ValueError as exc:
+            p.error(f"argument --{name.replace('_', '-')}: {exc}")
+    try:
+        args.speed = min(parse_speed(args.speed), args.fps)
+    except ValueError as exc:
+        p.error(f"argument --speed: {exc}")
     return args
 
 
@@ -71,14 +96,15 @@ def main(argv=None):
     if args.settings:
         from . import settings  # noqa: PLC0415
         print("Opening settings…", flush=True)
-        picked = settings.choose(args.color_name, args.monitor,
+        picked = settings.choose(args.color_name, args.monitor, args.speed,
                                  progress=lambda text: print(text, flush=True))
         if picked is None:
             print("Cancelled.")
             raise SystemExit(1)
+        color, speed, monitor = picked
         print("Saving…", flush=True)
-        settings.save(color=picked[0], monitor=picked[1])
-        print(f"Saved: colour {picked[0]}, monitor {picked[1]}")
+        settings.save(color=color, speed=settings.speed_text(speed), monitor=monitor)
+        print(f"Saved: colour {color}, speed {settings.speed_text(speed)}/s, monitor {monitor}")
         return
     print("Life in Life  -  shortcuts:")
     for keys, what in HELP:

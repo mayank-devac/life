@@ -1,5 +1,7 @@
 """Camera: zoom and pan in pixels over a square grid. The grid always covers the window."""
-from .config import MAX_ZOOM, MIN_ZOOM
+import math
+
+from .config import MAX_ZOOM, MIN_ZOOM, ZOOM_EASE
 
 
 class View:
@@ -8,6 +10,8 @@ class View:
         self.w, self.h = w, h
         self.base = max(w, h) / grid
         self.zoom = 1.0
+        self.target_zoom = 1.0       # smooth zoom heads here (see zoom_smooth / ease)
+        self.anchor = (w / 2, h / 2)  # ... keeping this pixel fixed
         self.ox = (w - self.grid_px) / 2
         self.oy = (h - self.grid_px) / 2
 
@@ -24,13 +28,40 @@ class View:
         self.oy = min(0.0, max(self.h - self.grid_px, self.oy))
 
     def zoom_at(self, factor, mx, my):
-        """Zoom while keeping the point under (mx, my) fixed."""
-        new = max(MIN_ZOOM, min(MAX_ZOOM, self.zoom * factor))
+        """Zoom right away, keeping the point under (mx, my) fixed."""
+        self._zoom_to(self.zoom * factor, mx, my)
+        self.target_zoom = self.zoom
+
+    def _zoom_to(self, zoom, mx, my):
+        new = max(MIN_ZOOM, min(MAX_ZOOM, zoom))
         f = new / self.zoom
         self.ox = mx - (mx - self.ox) * f
         self.oy = my - (my - self.oy) * f
         self.zoom = new
         self._clamp()
+
+    def zoom_smooth(self, factor, mx, my):
+        """Start gliding towards zoom * factor around (mx, my); ease() moves it there."""
+        self.target_zoom = max(MIN_ZOOM, min(MAX_ZOOM, self.target_zoom * factor))
+        self.anchor = (mx, my)
+
+    @property
+    def easing(self):
+        return self.zoom != self.target_zoom
+
+    def ease(self, dt):
+        """Move the zoom part of the way to its target (call once per frame)."""
+        if not self.easing:
+            return
+        if abs(self.target_zoom / self.zoom - 1) < 0.002:
+            new = self.target_zoom
+        else:
+            # Ease in log space, so zooming in and out feel the same.
+            k = 1 - math.exp(-ZOOM_EASE * dt)
+            new = math.exp(math.log(self.zoom) + (math.log(self.target_zoom) - math.log(self.zoom)) * k)
+        self._zoom_to(new, *self.anchor)
+        if abs(self.zoom - self.target_zoom) < 1e-9:
+            self.zoom = self.target_zoom
 
     def pan(self, dx, dy):
         self.ox += dx

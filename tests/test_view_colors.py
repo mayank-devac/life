@@ -1,11 +1,17 @@
 import argparse
+import contextlib
+import io
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from lifeinlife.cli import parse_args
-from lifeinlife.colors import hue_to_rgb, parse_color
+from lifeinlife import settings
+from lifeinlife.colors import THEMES, hue_to_rgb, parse_color, theme_to_rgb
 from lifeinlife.config import MAX_ZOOM, MIN_GRID
+from lifeinlife.rules import PRESETS
 from lifeinlife.view import View
 
 
@@ -22,6 +28,13 @@ class ParseColor(unittest.TestCase):
             with self.assertRaises(argparse.ArgumentTypeError):
                 parse_color(bad)
 
+    def test_themes(self):
+        self.assertIs(parse_color("Heat"), THEMES["heat"])
+        stops = THEMES["ocean"].stops
+        rgb = theme_to_rgb(np.array([0.0, 0.25, 0.999999]), THEMES["ocean"])
+        np.testing.assert_array_equal(rgb[:2], stops[:2])  # 4 stops: 0.25 is the second
+        np.testing.assert_allclose(rgb[2], stops[0], atol=1)  # it loops back to the first
+
     def test_hue_to_rgb_primaries(self):
         rgb = hue_to_rgb(np.array([0.0, 1 / 3, 2 / 3]), s=1.0)
         np.testing.assert_array_equal(rgb, [[255, 0, 0], [0, 255, 0], [0, 0, 255]])
@@ -30,6 +43,37 @@ class ParseColor(unittest.TestCase):
 class Args(unittest.TestCase):
     def test_grid_has_a_minimum(self):
         self.assertEqual(parse_args(["--grid", "2"]).grid, MIN_GRID)
+
+    def test_rules_speed_and_edges(self):
+        a = parse_args(["--rule", "highlife", "--inner-rule", "B2/S", "--speed", "4", "--edges", "dead"])
+        self.assertEqual((a.rule, a.inner_rule.notation, a.speed, a.edges),
+                         (PRESETS["highlife"], "B2/S", 4.0, "dead"))
+        self.assertEqual(parse_args(["--speed", "100", "--fps", "30"]).speed, 30)  # at most fps
+        self.assertIs(parse_args([]).color, None)
+        self.assertIs(parse_args(["--color", "neon"]).color, THEMES["neon"])
+
+    def test_bad_values_are_errors(self):
+        for argv in (["--rule", "nope"], ["--speed", "0"], ["--speed", "fast"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                parse_args(argv)
+
+
+class SettingsFile(unittest.TestCase):
+    def test_speed_is_saved_with_colour_and_monitor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings"
+            settings.save(path, color="heat", monitor=2)
+            settings.save(path, speed=settings.speed_text(4.0))
+            self.assertEqual(settings.load(path), {"color": "heat", "speed": "4", "monitor": "2"})
+            self.assertEqual(path.read_text(), "color=heat\nspeed=4\nmonitor=2\n")
+
+    def test_speed_labels_round_trip(self):
+        for speed in (0.5, 1, 2, 30):
+            self.assertEqual(settings.parse_speed(settings.speed_label(speed)), speed)
+        self.assertEqual(settings.speed_label(1), "1 generation / second")
+        with self.assertRaises(ValueError):
+            settings.parse_speed("-1")
 
 
 class ViewMaths(unittest.TestCase):
@@ -70,6 +114,28 @@ class ViewMaths(unittest.TestCase):
         self.assertEqual(v.zoom, 4.0)
         np.testing.assert_allclose(((1000 - v.ox) / v.grid_px, (500 - v.oy) / v.grid_px),
                                    centre, atol=1e-9)
+
+    def test_smooth_zoom_glides_to_target_around_anchor(self):
+        v = View(1000, 1000, 50)
+        v.zoom_smooth(2.0, 300, 400)
+        self.assertEqual(v.zoom, 1.0)  # nothing yet
+        self.assertTrue(v.easing)
+        before = ((300 - v.ox) / v.cell, (400 - v.oy) / v.cell)
+        v.ease(1 / 30)
+        self.assertTrue(1.0 < v.zoom < 2.0)
+        for _ in range(60):
+            v.ease(1 / 30)
+        self.assertEqual(v.zoom, 2.0)
+        self.assertFalse(v.easing)
+        np.testing.assert_allclose(((300 - v.ox) / v.cell, (400 - v.oy) / v.cell), before)
+
+    def test_smooth_zoom_is_clamped_and_instant_zoom_cancels_it(self):
+        v = View(100, 100, 10)
+        for _ in range(30):
+            v.zoom_smooth(2.0, 50, 50)
+        self.assertEqual(v.target_zoom, MAX_ZOOM)
+        v.zoom_at(1.5, 50, 50)
+        self.assertFalse(v.easing)
 
     def test_visible_cells_zoomed_out_is_everything(self):
         self.assertEqual(View(640, 640, 64).visible_cells(), (0, 64, 0, 64))

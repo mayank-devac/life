@@ -3,27 +3,27 @@ import numpy as np
 import pygame
 from pygame._sdl2.video import Texture
 
-from .config import DETAIL_ZOOM, HELP, OUTLINE_ALPHA, TEMPLATE_PX, TEXT, TEXT_DIM
-
-
-def micro_surface(micro):
-    """The inner grid as a white image with transparent gaps; tinted per cell when drawn."""
-    k = TEMPLATE_PX
-    mask = np.kron(micro, np.ones((k, k), dtype=np.uint8))
-    mask[k - 1::k, :] = 0
-    mask[:, k - 1::k] = 0
-    surf = pygame.Surface(mask.shape[::-1], pygame.SRCALPHA)
-    surf.fill((255, 255, 255, 0))
-    alpha = pygame.surfarray.pixels_alpha(surf)
-    alpha[:] = mask.T * 255  # surfarray is (x, y)
-    del alpha  # unlock the surface
-    return surf
+from .config import DETAIL_ZOOM, HELP, OUTLINE_ALPHA, TEXT, TEXT_DIM
 
 
 def cells_surface(world):
-    """The whole outer world as a size x size RGBA image: one pixel per cell, dead = clear."""
-    rgba = np.dstack([world.rgb, world.macro * np.uint8(255)])  # (rows, cols, 4)
-    return pygame.image.frombuffer(rgba.tobytes(), (world.size, world.size), "RGBA")
+    """The whole outer world as a size x size RGBA image: one pixel per cell, dead = clear
+    (or a fading ghost)."""
+    return pygame.image.frombuffer(world.rgba().tobytes(), (world.size, world.size), "RGBA")
+
+
+def inner_pixels(world, region):
+    """The inner worlds of the outer cells in `region` (r0, r1, c0, c1) as one RGBA array,
+    one pixel per inner cell: (rows * m, cols * m, 4). Each inner cell takes its outer
+    cell's colour and opacity, so ghosts of dead cells fade along with their world."""
+    r0, r1, c0, c1 = region
+    look = world.rgba()[r0:r1, c0:c1]           # (R, C, 4)
+    bits = world.inner[r0:r1, c0:c1]            # (R, C, m, m)
+    rows, cols, m = bits.shape[0], bits.shape[1], bits.shape[2]
+    img = np.empty((rows, m, cols, m, 4), dtype=np.uint8)
+    img[...] = look[:, None, :, None, :]
+    img[..., 3] = bits.transpose(0, 2, 1, 3) * look[:, None, :, None, 3]
+    return img.reshape(rows * m, cols * m, 4)
 
 
 class Painter:
@@ -35,7 +35,7 @@ class Painter:
         self.ren = renderer
         self.cells_tex = None   # the outer world as one texture, one texel per cell
         self.cells_gen = None   # world.generation that cells_tex shows
-        self.inner_tex = None   # the inner world, updated in place every frame
+        self.inner_tex = None   # the inner worlds on screen, updated in place every frame
         self.drawn_state = None  # what the last frame showed; same again -> skip drawing
         self.set_dpr(dpr)
 
@@ -70,16 +70,19 @@ class Painter:
         return view.zoom >= DETAIL_ZOOM
 
     # ---- frame
-    def draw(self, world, view, bg, show_help=False, toast=None, outline=False, present=True):
+    def draw(self, world, view, bg, show_help=False, toast=None, outline=False, present=True,
+             brush=None, help_top=0):
         """Draw one frame. `bg` is the clear colour, `toast` a message or None,
-        `outline` a faint border showing the window's edges. `present=False` leaves the
-        frame in the back buffer (tests read it from there)."""
+        `outline` a faint border showing the window's edges, `brush` the cells a pattern
+        stamp would cover ((row, col), ...) or None, `help_top` how far down (pixels) to
+        move the help panel. `present=False` leaves the frame in the back buffer (tests
+        read it from there)."""
         detail = self.animates(view)
         # Skip identical frames: the window keeps showing the last one. Zoomed out, the
-        # picture only changes when the outer world steps (every MACRO_EVERY frames) or you
+        # picture only changes when the outer world steps (every world.macro_every frames) or you
         # interact; zoomed in, also whenever the inner world steps (every frame, unpaused).
         state = (world.generation, world.tick if detail else None, view.ox, view.oy,
-                 view.zoom, view.w, view.h, bg, show_help, toast, outline)
+                 view.zoom, view.w, view.h, bg, show_help, toast, outline, brush, help_top)
         if state == self.drawn_state:
             return False
         self.drawn_state = state
@@ -88,16 +91,18 @@ class Painter:
         ren.draw_color = bg
         ren.clear()
         if detail:
-            self._draw_detail(world, view)
+            self._draw_detail(world, view, bg)
         else:
             self._draw_cells(world, view, bg)
 
+        if brush:
+            self._draw_brush(brush, view)
         if outline:
             ren.draw_color = (255, 255, 255, 40)
             ren.draw_rect((0, 0, view.w, view.h))
         if self.has_text:
             if show_help:
-                self._draw_help()
+                self._draw_help(help_top)
             if toast is not None:
                 self._draw_toast(toast, view)
         if present:
@@ -133,35 +138,71 @@ class Painter:
             ren.fill_rect((0, v.oy + (r + 1) * cell - gap, v.w, gap))
         ren.draw_blend_mode = pygame.BLENDMODE_BLEND
 
-    def _draw_detail(self, world, view):
-        """Zoomed in: every visible live cell shows the inner world, tinted its colour.
-        numpy finds the live cells and their positions; Python only issues the draw calls
-        (SDL batches them, since the tint is per-vertex colour, not a state change)."""
+    def _draw_detail(self, world, view, bg):
+        """Zoomed in: every visible cell shows its own inner world, in its colour. numpy
+        builds one image of everything on screen (a pixel per inner cell), the GPU scales
+        it up, and thin background lines are cut between the inner cells."""
         ren, v = self.ren, view
-        surf = micro_surface(world.micro)
-        if self.inner_tex is None:
+        r0, r1, c0, c1 = region = v.visible_cells()
+        if r1 <= r0 or c1 <= c0:
+            return
+        pixels = inner_pixels(world, region)
+        h, w = pixels.shape[:2]
+        surf = pygame.image.frombuffer(pixels.tobytes(), (w, h), "RGBA")
+        if self.inner_tex is None or (self.inner_tex.width, self.inner_tex.height) != (w, h):
             self.inner_tex = Texture.from_surface(ren, surf)
             self.inner_tex.blend_mode = pygame.BLENDMODE_BLEND
         else:
             self.inner_tex.update(surf)
-        inner = self.inner_tex
+        cell, m = v.cell, world.micro_size
+        nudge = 1 / 64  # see _draw_cells
+        x0, y0 = v.ox + c0 * cell, v.oy + r0 * cell
+        self.inner_tex.draw(dstrect=(x0 - nudge, y0 - nudge, (c1 - c0) * cell, (r1 - r0) * cell))
 
-        r0, r1, c0, c1 = v.visible_cells()
+        # Gaps: between outer cells as zoomed out, and between inner cells once they're
+        # big enough for a line not to swallow them (1/8 of an inner cell, like a grid).
+        gap = max(1.0, self.dpr)
+        inner = cell / m
+        inner_gap = max(1.0, inner / 8) if inner >= 4 * max(1.0, self.dpr) else 0.0
+        ren.draw_blend_mode = pygame.BLENDMODE_NONE
+        ren.draw_color = bg
+        top, height = y0, (r1 - r0) * cell
+        left, width = x0, (c1 - c0) * cell
+        for c in range(c0, c1):
+            x = v.ox + c * cell
+            ren.fill_rect((x + cell - gap, top, gap, height))
+            if inner_gap:
+                for k in range(1, m):
+                    ren.fill_rect((x + k * inner - inner_gap, top, inner_gap, height))
+        for r in range(r0, r1):
+            y = v.oy + r * cell
+            ren.fill_rect((left, y + cell - gap, width, gap))
+            if inner_gap:
+                for k in range(1, m):
+                    ren.fill_rect((left, y + k * inner - inner_gap, width, inner_gap))
+        ren.draw_blend_mode = pygame.BLENDMODE_BLEND
+
+        # A faint outline in each live cell's colour shows where the cells are.
         rows, cols = np.nonzero(world.macro[r0:r1, c0:c1])
         if rows.size == 0:
             return
-        cell, gap = v.cell, max(1.0, self.dpr)
-        colors = world.rgb[r0:r1, c0:c1][rows, cols].tolist()
+        colors = world.rgba()[r0:r1, c0:c1][rows, cols, :3].tolist()
         xs = (v.ox + (cols + c0) * cell).tolist()
         ys = (v.oy + (rows + r0) * cell).tolist()
         side = cell - gap
         for x, y, (r, g, b) in zip(xs, ys, colors):
-            inner.color = (r, g, b)  # tint the inner life with its cell's colour
-            inner.draw(dstrect=(x, y, cell, cell))
             ren.draw_color = (r, g, b, OUTLINE_ALPHA)
             ren.draw_rect((x, y, side, side))
 
     # ---- overlays
+    def _draw_brush(self, cells, view):
+        """A see-through preview of where a pattern stamp would land."""
+        ren, cell = self.ren, view.cell
+        side = max(1.0, cell - max(1.0, self.dpr))
+        ren.draw_color = (255, 255, 255, 110)
+        for r, c in cells:
+            ren.fill_rect((view.ox + c * cell, view.oy + r * cell, side, side))
+
     def _panel_surface(self, w, h):
         panel = pygame.Surface((w, h), pygame.SRCALPHA)
         radius = round(10 * self.dpr)
@@ -170,7 +211,7 @@ class Painter:
                          border_radius=radius)
         return panel
 
-    def _draw_help(self):
+    def _draw_help(self, top=0):
         if self.help_tex is None:
             d, font, font_big = self.dpr, self.font, self.font_big
             if font is None or font_big is None:
@@ -190,7 +231,7 @@ class Painter:
                 panel.blit(t, (pad + key_w + gap, ty + i * line_h))
             self.help_tex = Texture.from_surface(self.ren, panel)
         m = round(20 * self.dpr)
-        self.help_tex.draw(dstrect=(m, m, self.help_tex.width, self.help_tex.height))
+        self.help_tex.draw(dstrect=(m, m + top, self.help_tex.width, self.help_tex.height))
 
     def _draw_toast(self, message, view):
         if self.toast_tex is None or self.toast_tex_text != message:
