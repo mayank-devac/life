@@ -68,6 +68,7 @@ class World:
 
     def reseed(self):
         self.macro = random_grid(self.size)
+        self.age = 0  # outer generations since this world was seeded ("Time")
         self.set_color(self.color)  # also bumps generation (once per reseed)
         self.micro = seed_micro()
         self.history = []  # last two outer generations, for stall detection
@@ -84,6 +85,24 @@ class World:
             self.hue = None
             self.rgb = np.broadcast_to(np.array(color, dtype=np.uint8), (self.size, self.size, 3))
         self.generation += 1  # the renderer's cached texture is out of date
+
+    def toggle(self, row, col):
+        """Make a cell alive (with a random hue, in multicolour) or kill it. Returns True
+        if it's now alive."""
+        alive = not self.macro[row, col]
+        self.macro[row, col] = alive
+        if alive and self.hue is not None:
+            self.hue[row, col] = np.random.random()
+            self.rgb[row, col] = hue_to_rgb(self.hue[row:row + 1, col:col + 1])[0, 0]
+        # A hand-made change isn't a stall: give the new pattern a fresh chance.
+        self.stale, self.history = 0, []
+        self.generation += 1  # the renderer's cached texture is out of date
+        return alive
+
+    @property
+    def population(self):
+        """Live outer cells."""
+        return int(self.macro.sum())
 
     def frames_to_macro_step(self):
         """How many step() calls happen before the one that also steps the outer world.
@@ -107,6 +126,7 @@ class World:
             self.macro, self.hue = step_colored(self.macro, self.hue)
             self.rgb = hue_to_rgb(self.hue)
         self.generation += 1
+        self.age += 1
         snapshot = self.macro.tobytes()
         # Empty, frozen, or blinking in place (period 1 or 2): count it as stalled.
         self.stale = self.stale + 1 if (not self.macro.any() or snapshot in self.history) else 0

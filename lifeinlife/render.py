@@ -173,6 +173,8 @@ class Painter:
     def _draw_help(self):
         if self.help_tex is None:
             d, font, font_big = self.dpr, self.font, self.font_big
+            if font is None or font_big is None:
+                return  # no font module: draw() already skips text, this is a safety net
             pad, line_h, gap = round(16 * d), round(22 * d), round(24 * d)
             title = font_big.render("Life in Life", True, TEXT)
             keys = [font.render(k, True, TEXT) for k, _ in HELP]
@@ -192,6 +194,8 @@ class Painter:
 
     def _draw_toast(self, message, view):
         if self.toast_tex is None or self.toast_tex_text != message:
+            if self.font_big is None:
+                return
             d = self.dpr
             text = self.font_big.render(message, True, TEXT)
             px, py = round(14 * d), round(8 * d)

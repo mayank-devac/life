@@ -17,7 +17,7 @@ OPACITY=0.7
 ZOOM=1
 
 # World size: how many cells across. Fewer = bigger cells and bigger patterns.
-GRID=98
+GRID=144
 
 # Frames per second. This also sets the speed: the outer world steps once every 15 frames.
 FPS=30

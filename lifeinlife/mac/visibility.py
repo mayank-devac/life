@@ -11,14 +11,15 @@ it would freeze the wallpaper for good. Tested on macOS 27 / SDL 2.32.
 """
 import ctypes
 import ctypes.util
+import importlib
 
 
 class Visibility:
     def __init__(self, nswindow):
-        import objc  # noqa: PLC0415 - optional dependency (pyobjc), imported on use
-
         self.win = nswindow
-        self._objc = objc
+        # pyobjc is optional, so it's imported on use; via importlib because static
+        # checkers can't see its lazily created names (objc.objc_object).
+        self._objc = importlib.import_module("objc")
         cg = self.cg = ctypes.CDLL(ctypes.util.find_library("CoreGraphics"))
         cf = self.cf = ctypes.CDLL(ctypes.util.find_library("CoreFoundation"))
         cg.CGSessionCopyCurrentDictionary.restype = ctypes.c_void_p

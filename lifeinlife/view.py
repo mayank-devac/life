@@ -50,6 +50,11 @@ class View:
         self.oy = h / 2 - fy * self.grid_px
         self._clamp()
 
+    def cell_at(self, x, y):
+        """(row, col) of the grid cell under pixel (x, y), or None outside the grid."""
+        c, r = int((x - self.ox) // self.cell), int((y - self.oy) // self.cell)
+        return (r, c) if 0 <= r < self.grid and 0 <= c < self.grid else None
+
     def visible_cells(self):
         """(r0, r1, c0, c1): the half-open range of grid rows/columns that are on screen."""
         cell = self.cell

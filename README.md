@@ -49,6 +49,7 @@ If it isn't installed yet, these install it first.
 
 | Key | Action |
 |---|---|
+| Click | add a cell, or remove it if it's alive |
 | `Ctrl+Shift + Space` | pause / resume |
 | `Ctrl+Shift + R` | new random world |
 | `Ctrl+Shift + S` | settings: colour and monitor |
@@ -63,13 +64,19 @@ If it isn't installed yet, these install it first.
 > `Ctrl+Shift + S` and `Ctrl+Shift + Esc` are captured system-wide, so other apps keep their shortcuts.
 > Press **`Ctrl+Shift + W`** to unpin and get the rest of the controls back.
 
+While pinned, a small panel in the top-left corner of the screen has **play**, **pause** and
+**step** (one generation) buttons, plus the world's **Time** (generations since it was seeded)
+and **Population** (live cells). It sits just above the desktop icons, so app windows still
+cover it. It goes away when you unpin.
+
 ## As a wallpaper, it stays out of the way
 
 - Zoomed out it wakes about twice a second (when the outer world steps) instead of 30 times,
   and only redraws when something changed.
 - It pauses while the screen is locked, the display is asleep, or another user is logged in.
 - If the chosen monitor is plugged in later, unplugged, or changes resolution, it moves and
-  resizes to cover it again.
+  resizes to cover it again. If it disappears (e.g. an HDMI screen waking up slowly after
+  sleep), it waits 10 s for it to come back before falling back to the primary monitor.
 - `launchctl` / logout (SIGTERM) shuts it down cleanly; the log trims itself past 1 MB.
 
 ## Code layout
@@ -87,6 +94,7 @@ lifeinlife/
   cli.py                 command-line options
   mac/window.py          transparent + pinned window, monitor list
   mac/hotkeys.py         system-wide shortcuts (no permission prompt)
+  mac/hud.py             play / pause / step panel shown while pinned
   mac/visibility.py      screen locked / display asleep checks
 tests/                   python -m unittest discover -s tests -t .
 ```

@@ -41,6 +41,14 @@ class ViewMaths(unittest.TestCase):
         v.pan(-10_000, -10_000)
         self.assertAlmostEqual(v.ox + v.grid_px, 800)
 
+    def test_cell_at_finds_the_cell_under_a_pixel(self):
+        v = View(640, 640, 64)  # 10 px cells, no offset
+        self.assertEqual(v.cell_at(0, 0), (0, 0))
+        self.assertEqual(v.cell_at(55, 21), (2, 5))
+        self.assertIsNone(v.cell_at(640, 10))  # just past the right edge
+        v.zoom_at(2.0, 0, 0)  # 20 px cells, still anchored top-left
+        self.assertEqual(v.cell_at(55, 21), (1, 2))
+
     def test_zoom_keeps_point_under_cursor(self):
         v = View(1000, 1000, 50)
         v.zoom_at(2.0, 300, 400)

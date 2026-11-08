@@ -98,6 +98,25 @@ class WorldBehaviour(unittest.TestCase):
             w.step()
         self.assertTrue((w.rgb == (10, 20, 30)).all())
 
+    def test_toggle_adds_and_removes_a_cell(self):
+        for color in (None, (10, 20, 30)):  # multicolour and single colour
+            w = World(16, color=color)
+            w.macro[:] = 0
+            gen = w.generation
+            self.assertTrue(w.toggle(3, 5))
+            self.assertEqual((w.population, int(w.macro[3, 5])), (1, 1))
+            self.assertGreater(w.generation, gen)  # renderer must redraw
+            self.assertFalse(w.toggle(3, 5))
+            self.assertEqual(w.population, 0)
+
+    def test_age_counts_outer_steps_and_resets_on_reseed(self):
+        w = World(16)
+        for _ in range(2 * MACRO_EVERY):
+            w.step()
+        self.assertEqual(w.age, 2)
+        w.reseed()
+        self.assertEqual(w.age, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

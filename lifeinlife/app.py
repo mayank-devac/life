@@ -21,8 +21,8 @@ from pygame._sdl2.video import Renderer
 
 from . import settings
 from .colors import parse_color
-from .config import (CLEAR_BG, CLICKABLE_BG, HIDDEN_WAIT, MACRO_EVERY, MAX_WAIT, PINNED_WAIT,
-                     SCREEN_POLL, SOLID_BG, SYSTEM_POLL)
+from .config import (CLEAR_BG, CLICK_SLOP, CLICKABLE_BG, HIDDEN_WAIT, MACRO_EVERY, MAX_WAIT, MONITOR_GRACE,
+                     PINNED_WAIT, SCREEN_POLL, SOLID_BG, SYSTEM_POLL)
 from .render import Painter
 from .view import View
 from .world import World
@@ -89,6 +89,7 @@ class LifeInLife:
         self.toast_text, self.toast_until = "", 0.0
         self.drag_mode = None  # None | "move" | "pan"
         self.grab = (0, 0)     # where the window was grabbed, for "move"
+        self.dragged = 0.0     # how far (points) the mouse moved during this "pan"
         self.hovered = False
         self.pending = []      # actions coming from the global hotkeys
 
@@ -96,7 +97,12 @@ class LifeInLife:
         self.visibility = None
         self.next_system_poll = 0.0
         self.next_screen_poll = 0.0
-        self.screens_seen = None
+        self.follow_monitor = False  # wallpaper mode: keep the window on the chosen monitor
+        self.monitor_missing_since = None  # when the chosen monitor went away, or None
+        self.placed = None  # (target frame, frame we actually got) after the last move
+        self.hud = None        # pinned: the clickable play / pause / step panel
+        self.hud_error = None
+        self.hud_key = None    # (generation, paused, window frame) it last showed
 
         # macOS: transparent background + wallpaper mode
         self.mac = None
@@ -116,7 +122,8 @@ class LifeInLife:
                 sys.exit(f"--wallpaper: {self.mac_error}")
             mac.pin(frame=self.screen_frame)
             self._start_global_hotkeys()
-            self.screens_seen = self._screen_layout()
+            self._show_hud()
+            self.follow_monitor = True
         if self.mac is not None:
             try:
                 from .mac.visibility import Visibility  # noqa: PLC0415 - macOS only
@@ -174,6 +181,31 @@ class LifeInLife:
         except (OSError, AttributeError) as exc:
             print(f"Note: global shortcuts unavailable ({exc}); Ctrl+C in this terminal quits.")
 
+    def _show_hud(self):
+        """Pinned: show the play / pause / step panel (clicks can't reach the wallpaper)."""
+        if self.hud is None and self.hud_error is None:
+            try:
+                from .mac.hud import Hud  # noqa: PLC0415 - macOS only
+                self.hud = Hud(self._on_hotkey)  # clicks arrive like global hotkeys
+            except Exception as exc:  # noqa: BLE001 - nice to have, never fatal
+                self.hud_error = exc
+                print(f"Note: can't show the play / pause panel ({exc}).")
+        if self.hud is not None and self.mac is not None:
+            self.hud_key = None  # place and fill it on the next draw
+            self.hud.show(self.mac.win.screen())
+
+    def _update_hud(self):
+        if self.hud is None or self.mac is None or not self.mac.pinned:
+            return
+        frame = self._frame_key(self.mac.frame())
+        key = (self.world.generation, self.paused, frame)
+        if key == self.hud_key:
+            return
+        if self.hud_key is None or self.hud_key[2] != frame:
+            self.hud.place(self.mac.win.screen())  # the wallpaper moved to another monitor
+        self.hud_key = key
+        self.hud.update(self.world.age, self.world.population, self.paused)
+
     @property
     def pinned(self):
         return self.mac is not None and self.mac.pinned
@@ -202,6 +234,13 @@ class LifeInLife:
         elif action == "pause":
             self.paused = not self.paused
             self.toast("Paused" if self.paused else "Running")
+        elif action in ("run", "hold"):  # the pinned panel's play / pause buttons
+            if self.paused != (action == "hold"):
+                self.do("pause")
+        elif action == "step":  # pause, then advance the outer world one generation
+            self.paused = True
+            for _ in range(self.world.frames_to_macro_step() + 1):
+                self._step_world()
         elif action == "reseed":
             self.world.reseed()
             self.toast("New world")
@@ -250,15 +289,16 @@ class LifeInLife:
         """Apply a choice from the dialog right away, and save it for the next start."""
         self.world.set_color(parse_color(color_name))  # the dialog already checked it
         self.color_name = color_name
-        if monitor != self.monitor:
-            self.monitor = monitor
-            if self.wallpaper_mode:
-                # Cover the new monitor, pinned or not. The frame carries its size and
-                # position, so a different resolution is picked up too (via WINDOWSIZECHANGED).
-                self._pick_monitor(monitor)
-                if self.mac is not None and self.screen_frame is not None:
-                    self.mac.set_frame(self.screen_frame)
-                    self._sync_size()
+        self.monitor = monitor
+        if self.wallpaper_mode and self.mac is not None:
+            # Cover the chosen monitor, pinned or not, even if it's the one already chosen:
+            # the window may have been moved off it (e.g. by macOS while it was asleep).
+            # The frame carries its size and position, so a different resolution is
+            # picked up too (via WINDOWSIZECHANGED).
+            self.monitor_missing_since = None
+            target = self._monitor_frame(monitor)
+            if target is not None:
+                self._cover(target, force=True)
         self.painter.invalidate()
         try:
             settings.save(color=color_name, monitor=monitor)
@@ -275,10 +315,13 @@ class LifeInLife:
         if mac.pinned:
             mac.unpin()
             mac.unwatch_hotkeys()
+            if self.hud is not None:
+                self.hud.hide()
             self.toast("Interactive  -  Ctrl+Shift+W to pin again", 2.5)
         else:
             mac.pin()
             self._start_global_hotkeys()
+            self._show_hud()
             self.show_help = False
             self.toast("Pinned to desktop  -  Ctrl+Shift+W to unpin", 2.5)
 
@@ -303,9 +346,14 @@ class LifeInLife:
                 # the window moving under the cursor feeds back into the next rel.
                 self.drag_mode, self.grab = "move", event.pos
             elif event.button == 1:
-                self.drag_mode = "pan"
+                self.drag_mode, self.dragged = "pan", 0.0
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button in (1, 3):
+            # A press that (almost) didn't move is a click, not a pan: toggle that cell.
+            if event.button == 1 and self.drag_mode == "pan" and self.dragged < CLICK_SLOP:
+                cell = self.view.cell_at(event.pos[0] * self.dpr, event.pos[1] * self.dpr)
+                if cell is not None:
+                    self.world.toggle(*cell)
             self.drag_mode = None
 
         elif event.type == pygame.MOUSEMOTION and self.drag_mode == "move":
@@ -313,6 +361,7 @@ class LifeInLife:
             self.window.position = (wx + event.pos[0] - self.grab[0], wy + event.pos[1] - self.grab[1])
 
         elif event.type == pygame.MOUSEMOTION and self.drag_mode == "pan":
+            self.dragged += abs(event.rel[0]) + abs(event.rel[1])
             self.view.pan(event.rel[0] * self.dpr, event.rel[1] * self.dpr)
 
         elif event.type == pygame.MOUSEWHEEL:
@@ -331,24 +380,63 @@ class LifeInLife:
             self.painter.invalidate()  # the OS lost our pixels: redraw next frame
 
     # ---- system state (polled, cheap)
-    def _screen_layout(self):
-        from .mac.window import frame_key, mac_screens  # noqa: PLC0415
-        return tuple(frame_key(f) for _, f in (mac_screens() or []))
+    @staticmethod
+    def _monitor_frame(number):
+        """NSRect of monitor `number` (1 = primary), or None if it isn't connected."""
+        from .mac.window import mac_screens  # noqa: PLC0415
+        screens = mac_screens() or []
+        return screens[number - 1][1] if 1 <= number <= len(screens) else None
 
-    def _follow_monitor(self):
-        """Wallpaper mode: if monitors were plugged in, unplugged or changed resolution,
-        cover the chosen monitor again (e.g. MONITOR=2 connected after login)."""
-        from .mac.window import frame_key  # noqa: PLC0415
-        layout = self._screen_layout()
-        if layout == self.screens_seen:
+    def _cover(self, target, force=False):
+        """Move the window onto `target` (an NSRect) unless it's already there."""
+        mac = self.mac
+        if mac is None:
             return
-        self.screens_seen = layout
-        self._pick_monitor(self.monitor)
-        if self.pinned and self.screen_frame is not None \
-                and frame_key(self.mac.frame()) != frame_key(self.screen_frame):
-            print(f"Monitors changed: covering monitor {self.monitor} again.")
-            self.mac.set_frame(self.screen_frame)
+        want, have = self._frame_key(target), self._frame_key(mac.frame())
+        # Skip when nothing changed since our last move. Comparing with the frame we
+        # actually got (not only the target) stops a retry every poll if macOS adjusts it.
+        if not force and self.placed == (want, have):
+            return
+        if have != want:
+            mac.set_frame(target)
+            self._sync_size()
             self.painter.invalidate()
+        self.screen_frame = target
+        self.placed = (want, self._frame_key(mac.frame()))
+
+    def _follow_monitor(self, now):
+        """Wallpaper mode: keep the window on the chosen monitor.
+
+        Checks the window itself, not just whether the monitor list changed: after sleep
+        a monitor can drop out and come back between two polls (HDMI is slower to wake
+        than USB-C). macOS moves the window to a remaining screen meanwhile, and the
+        list looks unchanged afterwards. If the chosen monitor is gone, wait
+        MONITOR_GRACE seconds for it before settling on the primary one."""
+        if not self.pinned:
+            return  # unpinned: the user may have moved it on purpose
+        target = self._monitor_frame(self.monitor)
+        if target is None:
+            if self.monitor_missing_since is None:
+                self.monitor_missing_since = now
+                print(f"Monitor {self.monitor} disconnected: waiting up to "
+                      f"{MONITOR_GRACE:g}s for it to come back.", flush=True)
+            if now - self.monitor_missing_since < MONITOR_GRACE:
+                return
+            target = self._monitor_frame(1)
+            if target is None:
+                return  # no screens at all right now (all asleep)
+            if self.placed is None or self.placed[0] != self._frame_key(target):
+                print(f"Monitor {self.monitor} still missing: using the primary one until "
+                      f"it's back.", flush=True)
+        elif self.monitor_missing_since is not None:
+            self.monitor_missing_since = None
+            print(f"Monitor {self.monitor} is back: covering it again.", flush=True)
+        self._cover(target)
+
+    @staticmethod
+    def _frame_key(frame):
+        from .mac.window import frame_key  # noqa: PLC0415
+        return frame_key(frame)
 
     def _poll_system(self, now):
         if self.visibility is not None and now >= self.next_system_poll:
@@ -360,14 +448,16 @@ class LifeInLife:
                     self.painter.invalidate()
                     self.next_tick = now  # carry on from here; don't replay the hidden time
                 self.hidden = reason
-        if self.screens_seen is not None and now >= self.next_screen_poll:
+        if self.follow_monitor and now >= self.next_screen_poll:
             self.next_screen_poll = now + SCREEN_POLL
-            self._follow_monitor()
+            self._follow_monitor(now)
 
     # ---- simulation and drawing
     def update(self):
-        if self.paused:
-            return
+        if not self.paused:
+            self._step_world()
+
+    def _step_world(self):
         if self.world.step():
             self.toast("World settled  -  starting a new one")
 
@@ -387,6 +477,7 @@ class LifeInLife:
             self.painter.invalidate()
         self.painter.draw(self.world, self.view, self._background(), show_help=self.show_help,
                           toast=toast, outline=self.transparent and self.hovered and not self.pinned)
+        self._update_hud()
 
     def _advance(self, now):
         """Run every frame that is due by `now` (several after a sleep)."""
@@ -464,6 +555,8 @@ class LifeInLife:
                 if self.running:
                     self._wait(self._timeout(time.monotonic()))
         finally:
+            if self.hud is not None:
+                self.hud.close()
             if self.mac:
                 self.mac.close()
             pygame.quit()
