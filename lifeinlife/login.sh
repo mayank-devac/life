@@ -46,6 +46,9 @@ DOMAIN="gui/$(id -u)"
 FILES=("life inside life.py" "wall.sh" "requirements.txt")
 PACKAGE="lifeinlife"   # the code; copied whole, minus __pycache__
 
+# Bold yellow for the notes shown to you, only when printing to a terminal (not into a log or pipe).
+if [ -t 1 ] && [ -z "$NO_COLOR" ]; then HL=$'\033[1;33m'; RST=$'\033[0m'; else HL=""; RST=""; fi
+
 # Escape text for use inside the plist's XML (& < > in a path would break it).
 xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
@@ -199,7 +202,7 @@ EOF
     local try
     for try in 1 2 3 4 5; do
         launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null && {
-            echo "Note: it can take a few seconds for the wallpaper to appear on screen."
+            echo "${HL}Note: it can take a few seconds for the wallpaper to appear on screen.${RST}"
             return 0
         }
         sleep 1
