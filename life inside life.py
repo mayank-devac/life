@@ -22,6 +22,8 @@ import numpy as np
 # macOS: run as a background app, with no Dock icon and no "Python" menu in the menu bar.
 # SDL reads this hint before it creates the app, so the icon never appears.
 os.environ.setdefault("SDL_MAC_BACKGROUND_APP", "1")
+# Nearest-neighbour scaling: the world is drawn as one tiny texture blown up to screen size.
+os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "0")
 import pygame  # noqa: E402 - must come after the hint above
 from pygame._sdl2.video import Renderer, Texture
 
@@ -50,9 +52,10 @@ HELP = [
     ("Ctrl+Shift + Up / Down", "opacity"),
     ("Ctrl+Shift + Space", "pause / resume"),
     ("Ctrl+Shift + R", "new random world"),
-    ("Ctrl+Shift + W", "pin to desktop (wallpaper)"),
+    ("Ctrl+Shift + W", "pin to desktop (wallpaper) / unpin"),
     ("Ctrl+Shift + H", "show / hide help"),
     ("Ctrl+Shift + Esc", "quit"),
+    ("While pinned", "only Ctrl+Shift + W and Esc work"),
 ]
 
 # Ctrl+Shift + <key> -> action. pygame keys are used while the window has focus.
@@ -70,9 +73,10 @@ PYGAME_KEYS = {
     pygame.K_MINUS: "zoom-",
     pygame.K_KP_MINUS: "zoom-",
 }
-# The same shortcuts as macOS key codes, used while pinned (the window never has focus then).
-MAC_KEYCODES = {53: "quit", 13: "wallpaper", 4: "help", 49: "pause", 15: "reseed",
-                126: "opacity+", 125: "opacity-", 24: "zoom+", 27: "zoom-"}
+# While pinned the window never has focus, so shortcuts must be grabbed system-wide, which
+# takes them away from every other app. Only grab the two needed to get out: quit (Esc) and
+# unpin (W). Everything else works again once unpinned. Values are macOS key codes.
+MAC_KEYCODES = {53: "quit", 13: "wallpaper"}
 
 
 # ---------------------------------------------------------------- life
@@ -364,10 +368,11 @@ class MacWindow:
     def keep_transparent(self, force=False):
         """macOS creates the content view's backing layer lazily, after the first frame,
         and gives it an opaque black background, which hides the wallpaper behind it.
-        Called every frame; it only does work when that layer has been (re)created."""
+        Called every frame; it only does work when that layer has been (re)created.
+        Returns True when it did, so the caller knows to redraw."""
         root = self.win.contentView().layer()
         if not force and (root is None or root is self._fixed_layer):
-            return
+            return False
         self._fixed_layer = root
 
         def walk(view):
@@ -379,6 +384,7 @@ class MacWindow:
                 walk(sub)
 
         walk(self.win.contentView())
+        return True
 
     def pin(self, frame=None):
         """Pin behind the desktop icons. `frame` (an NSRect) resizes the window to cover a screen."""
@@ -411,13 +417,13 @@ class MacWindow:
         self.pinned = False
 
     def watch_hotkeys(self, on_action):
-        """Catch Ctrl+Shift shortcuts typed in other apps while pinned. No permission needed."""
+        """Catch Ctrl+Shift+Esc / Ctrl+Shift+W typed in other apps while pinned. No permission needed."""
         if self.hotkeys is None:
             self.hotkeys = CarbonHotkeys(on_action)
         self.hotkeys.register()
 
     def unwatch_hotkeys(self):
-        """Release the shortcuts so other apps get Ctrl+Shift+R etc. back."""
+        """Release the shortcuts so other apps get them back."""
         if self.hotkeys is not None:
             self.hotkeys.unregister()
 
@@ -466,6 +472,11 @@ class LifeInLife:
         self.macro, self.hue = random_macro()
         self.rgb = self.colors()
         self.micro = seed_micro()
+        self.generation = 0     # bumps whenever the outer world changes
+        self.cells_tex = None   # the outer world as one MACRO_SIZE x MACRO_SIZE texture
+        self.cells_gen = None   # generation that cells_tex shows
+        self.inner_tex = None   # the inner world, updated in place every frame
+        self.drawn_state = None # what the last frame showed; same again -> skip drawing
         self.history = []  # last two outer generations, for stall detection
         self.stale = 0
         self.tick = 0
@@ -553,6 +564,7 @@ class LifeInLife:
         self.macro, self.hue = random_macro()
         self.rgb = self.colors()
         self.micro = seed_micro()
+        self.generation += 1
         self.history.clear()
         self.stale = 0
 
@@ -638,6 +650,8 @@ class LifeInLife:
             self.hovered = False
         elif event.type == pygame.WINDOWFOCUSLOST:
             self.drag_mode = None  # don't get stuck dragging if the button-up happened elsewhere
+        elif event.type in (pygame.WINDOWEXPOSED, pygame.WINDOWSIZECHANGED):
+            self.drawn_state = None  # the OS lost or resized our pixels: redraw next frame
 
     # ---- simulation
     def update(self):
@@ -647,6 +661,7 @@ class LifeInLife:
         if self.tick % MACRO_EVERY == 0:
             self.macro, self.hue = step_colored(self.macro, self.hue)
             self.rgb = self.colors()
+            self.generation += 1
             snapshot = self.macro.tobytes()
             # Empty, frozen, or blinking in place (period 1 or 2): count it as stalled.
             self.stale = self.stale + 1 if (not self.macro.any() or snapshot in self.history) else 0
@@ -657,27 +672,60 @@ class LifeInLife:
         self.tick += 1
 
     # ---- drawing
+    def _cells_texture(self):
+        """The whole outer world as one tiny RGBA texture (one texel per cell, dead cells
+        transparent). Rebuilt only when the world changes, then drawn scaled up in one call."""
+        if self.cells_gen != self.generation or self.cells_tex is None:
+            rgba = np.dstack([self.rgb, self.macro * np.uint8(255)])  # (rows, cols, 4)
+            surf = pygame.image.frombuffer(rgba.tobytes(), (MACRO_SIZE, MACRO_SIZE), "RGBA")
+            if self.cells_tex is None:
+                self.cells_tex = Texture.from_surface(self.renderer, surf)
+                self.cells_tex.blend_mode = pygame.BLENDMODE_BLEND
+            else:
+                self.cells_tex.update(surf)
+            self.cells_gen = self.generation
+        return self.cells_tex
+
     def draw(self):
         v, ren = self.view, self.renderer
+        detail = v.zoom >= DETAIL_ZOOM
+        now = time.monotonic()
+        if self.show_help and now > self.help_until:
+            self.show_help = False
+        toast = self.toast_text if now < self.toast_until else None
+
+        # Zoomed out, the picture only changes when the outer world steps (every MACRO_EVERY
+        # frames) or you interact. Skip identical frames: the window keeps showing the last one.
+        fixed = self.transparent and self.mac is not None and self.mac.keep_transparent()
+        state = (self.generation, v.ox, v.oy, v.zoom, self.show_help, toast,
+                 self.hovered, self.pinned)
+        if not detail and not fixed and state == self.drawn_state:
+            return
+        self.drawn_state = None if detail else state
+
         if not self.transparent:
-            ren.draw_color = SOLID_BG
+            bg = SOLID_BG
         elif self.bg_alpha > 0:
-            ren.draw_color = (*SOLID_BG[:3], self.bg_alpha)  # tinted see-through backdrop
+            bg = (*SOLID_BG[:3], self.bg_alpha)  # tinted see-through backdrop
         elif self.pinned:
-            ren.draw_color = CLEAR_BG
+            bg = CLEAR_BG
         else:
-            ren.draw_color = CLICKABLE_BG
+            bg = CLICKABLE_BG
+        ren.draw_color = bg
         ren.clear()
 
         cell = v.cell
-        detail = v.zoom >= DETAIL_ZOOM
         # Only visit cells that are on screen
         c0, c1 = max(0, int(-v.ox // cell)), min(MACRO_SIZE, int((v.w - v.ox) // cell) + 1)
         r0, r1 = max(0, int(-v.oy // cell)), min(MACRO_SIZE, int((v.h - v.oy) // cell) + 1)
 
         if detail:
-            inner = Texture.from_surface(ren, micro_surface(self.micro))
-            inner.blend_mode = pygame.BLENDMODE_BLEND
+            if self.inner_tex is None:
+                self.inner_tex = Texture.from_surface(ren, micro_surface(self.micro))
+                self.inner_tex.blend_mode = pygame.BLENDMODE_BLEND
+            else:
+                self.inner_tex.update(micro_surface(self.micro))
+            inner = self.inner_tex
             gap = max(1.0, self.dpr)
             for r in range(r0, r1):
                 y = v.oy + r * cell
@@ -690,30 +738,28 @@ class LifeInLife:
                         ren.draw_color = (int(rgb[0]), int(rgb[1]), int(rgb[2]), 90)
                         ren.draw_rect((x, y, cell - gap, cell - gap))
         else:
-            size = cell - max(1.0, self.dpr)  # leave a hairline gap between cells
+            self._cells_texture().draw(dstrect=(v.ox, v.oy, v.grid_px, v.grid_px))
+            # Cut a hairline gap between cells by painting background over each cell's
+            # right/bottom edge (blend off, so it also "erases" to a transparent background).
+            gap = max(1.0, self.dpr)
+            ren.draw_blend_mode = pygame.BLENDMODE_NONE
+            ren.draw_color = bg
+            for c in range(c0, c1):
+                ren.fill_rect((v.ox + (c + 1) * cell - gap, 0, gap, v.h))
             for r in range(r0, r1):
-                y = v.oy + r * cell
-                for c in range(c0, c1):
-                    if self.macro[r, c]:
-                        rgb = self.rgb[r, c]
-                        ren.draw_color = (int(rgb[0]), int(rgb[1]), int(rgb[2]), 255)
-                        ren.fill_rect((v.ox + c * cell, y, size, size))
+                ren.fill_rect((0, v.oy + (r + 1) * cell - gap, v.w, gap))
+            ren.draw_blend_mode = pygame.BLENDMODE_BLEND
 
         if self.transparent and self.hovered and not self.pinned:
             ren.draw_color = (255, 255, 255, 40)  # faint outline so you can see the window's edges
             ren.draw_rect((0, 0, v.w, v.h))
 
-        now = time.monotonic()
-        if self.show_help and now > self.help_until:
-            self.show_help = False
         if self.font is not None:
             if self.show_help:
                 self._draw_help()
-            if now < self.toast_until:
+            if toast is not None:
                 self._draw_toast()
 
-        if self.transparent and self.mac is not None:
-            self.mac.keep_transparent()
         ren.present()
 
     def _panel_surface(self, w, h):
