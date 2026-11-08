@@ -226,16 +226,22 @@ class LifeInLife:
         if self.dialog is not None and self.dialog.is_alive():
             return  # already open
         color, monitor = self.color_name, self.monitor
+        self.toast("Opening settings…", 3)  # osascript takes a moment to show the window
+
+        def tell(kind, value):
+            self.picked.put((kind, value))  # the main loop acts on it (pygame isn't thread-safe)
+            self.woken.set()                # end a pinned / hidden sleep now
+            try:
+                pygame.event.post(pygame.event.Event(self.WAKE))  # end event.wait() now
+            except pygame.error:
+                pass  # still seen on the next wake-up, at most MAX_WAIT later
 
         def ask():
-            picked = settings.choose(color, monitor)
-            if picked is not None:
-                self.picked.put(picked)  # the main loop applies it (pygame isn't thread-safe)
-                self.woken.set()         # end a pinned / hidden sleep now
-                try:
-                    pygame.event.post(pygame.event.Event(self.WAKE))  # end event.wait() now
-                except pygame.error:
-                    pass  # still applied on the next wake-up, at most MAX_WAIT later
+            picked = settings.choose(color, monitor, progress=lambda text: tell("toast", text))
+            if picked is None:
+                tell("toast", None)  # cancelled
+            else:
+                tell("apply", picked)
 
         self.dialog = threading.Thread(target=ask, name="settings-dialog", daemon=True)
         self.dialog.start()
@@ -440,7 +446,16 @@ class LifeInLife:
                 while self.pending:
                     self.do(self.pending.pop(0))
                 while not self.picked.empty():
-                    self.apply_settings(*self.picked.get())
+                    kind, value = self.picked.get()
+                    if kind == "apply":
+                        self.toast("Applying…", 3)
+                        if not self.hidden:
+                            self.draw()  # show it before the (brief) work starts
+                        self.apply_settings(*value)
+                    elif value is None:
+                        self.toast_until = 0.0  # cancelled: drop the "…" message
+                    else:
+                        self.toast(value, 3)
                 now = time.monotonic()
                 self._poll_system(now)
                 if not self.hidden:

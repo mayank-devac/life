@@ -85,10 +85,12 @@ def monitor_labels():
             for i, (name, f) in enumerate(mac_screens() or [], 1)]
 
 
-def choose(color, monitor):
+def choose(color, monitor, progress=None):
     """Ask for a colour, then a monitor (skipped with only one screen). `color` is the
     current colour's text ("multi", "red", "#ff8800"), `monitor` its number.
+    `progress(text)`, if given, is told about the pause between the two windows.
     Returns (color_text, monitor_number), or None if cancelled."""
+    progress = progress or (lambda _text: None)
     names = ["multi", *NAMED_COLORS]
     picked = _osascript(_PICK, f"Cell colour (now: {color}):", color, *names, CUSTOM)
     if not picked:
@@ -104,6 +106,7 @@ def choose(color, monitor):
             _osascript(_ALERT, str(exc))
             return None
 
+    progress("Loading monitors…")
     labels = monitor_labels()
     if len(labels) > 1:
         current = next((l for l in labels if l.startswith(f"{monitor}:")), labels[0])

@@ -70,10 +70,13 @@ def main(argv=None):
         return
     if args.settings:
         from . import settings  # noqa: PLC0415
-        picked = settings.choose(args.color_name, args.monitor)
+        print("Opening settings…", flush=True)
+        picked = settings.choose(args.color_name, args.monitor,
+                                 progress=lambda text: print(text, flush=True))
         if picked is None:
             print("Cancelled.")
             raise SystemExit(1)
+        print("Saving…", flush=True)
         settings.save(color=picked[0], monitor=picked[1])
         print(f"Saved: colour {picked[0]}, monitor {picked[1]}")
         return

@@ -172,6 +172,7 @@ set_color() {
 gui() {
     need_install
     bash "$WALL" --settings || return 0   # cancelled
+    echo "Applying… (restarting the wallpaper)"
     restart
     echo "Applied (running now, and at every login)."
 }
