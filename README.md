@@ -149,3 +149,5 @@ tests/                   python -m unittest discover -s tests -t .
 ```
 
 >Tested on macOS; it may also work on Windows, though this has not been fully verified.
+>
+> If anything breaks, `LIFE_FROM_SOURCE=1 ./login.sh install` puts you back on the source version.
