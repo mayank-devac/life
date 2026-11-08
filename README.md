@@ -1,6 +1,7 @@
-# life
+# life 🧬
 
 Conway's Game of Life where every live cell contains another Game of Life — a recursive, colorful cellular automaton rendered with pygame, zoomable in real time.
+And you can keep the game as your wallpaper.
 
 ## Run
 
