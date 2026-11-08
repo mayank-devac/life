@@ -75,6 +75,8 @@ else
     RUN=("${LIFE_BIN:-life}")
 fi
 
+# Note: it can take a few seconds for the wallpaper to appear on screen.
+
 exec "${RUN[@]}" --wallpaper \
     --bg-opacity "$BG_OPACITY" \
     --opacity "$OPACITY" \

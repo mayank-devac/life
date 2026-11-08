@@ -198,7 +198,10 @@ EOF
     # Right after a bootout launchd can still be tearing the old one down; retry briefly.
     local try
     for try in 1 2 3 4 5; do
-        launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null && return 0
+        launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null && {
+            echo "Note: it can take a few seconds for the wallpaper to appear on screen."
+            return 0
+        }
         sleep 1
     done
     launchctl bootstrap "$DOMAIN" "$PLIST" || { echo "Failed to load $PLIST"; exit 1; }
