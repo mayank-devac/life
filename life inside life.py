@@ -305,6 +305,36 @@ class CarbonHotkeys:
             self.handler_ref = ctypes.c_void_p()
 
 
+def mac_screens():
+    """macOS monitors as [(name, NSRect frame in points)], primary (menu-bar) screen first.
+    Returns None when AppKit (pyobjc) isn't available."""
+    try:
+        AppKit = importlib.import_module("AppKit")
+    except ImportError:
+        return None
+    screens = []
+    for i, s in enumerate(AppKit.NSScreen.screens()):
+        try:
+            name = s.localizedName()  # macOS 10.15+
+        except AttributeError:
+            name = f"Display {i + 1}"
+        screens.append((name, s.frame()))
+    return screens
+
+
+def list_monitors():
+    screens = mac_screens()
+    if screens:
+        for i, (name, f) in enumerate(screens, 1):
+            tag = "  (primary)" if i == 1 else ""
+            print(f"  {i}: {name}  {int(f.size.width)}x{int(f.size.height)}{tag}")
+        return
+    pygame.init()
+    for i, (w, h) in enumerate(pygame.display.get_desktop_sizes(), 1):
+        print(f"  {i}: {w}x{h}{'  (primary)' if i == 1 else ''}")
+    pygame.quit()
+
+
 class MacWindow:
     """Uses pyobjc to set the NSWindow properties pygame can't reach."""
 
@@ -350,7 +380,8 @@ class MacWindow:
 
         walk(self.win.contentView())
 
-    def pin(self, cover_screen):
+    def pin(self, frame=None):
+        """Pin behind the desktop icons. `frame` (an NSRect) resizes the window to cover a screen."""
         A, w = self.AppKit, self.win
         w.setLevel_(_desktop_level())
         w.setCollectionBehavior_(
@@ -360,8 +391,8 @@ class MacWindow:
         )
         w.setIgnoresMouseEvents_(True)  # clicks go straight through to the desktop
         w.setHasShadow_(False)
-        if cover_screen:
-            w.setFrame_display_(A.NSScreen.screens()[0].frame(), True)
+        if frame is not None:
+            w.setFrame_display_(frame, True)
         w.orderFrontRegardless()
         self.pinned = True
 
@@ -400,8 +431,9 @@ class MacWindow:
 class LifeInLife:
     def __init__(self, args):
         pygame.init()
+        self.screen_frame = None  # NSRect of the monitor the wallpaper covers
         if args.wallpaper:
-            size, pos = pygame.display.get_desktop_sizes()[0], (0, 0)
+            size, pos = self._pick_monitor(args.monitor), (0, 0)
         else:
             size, pos = (args.size, args.size), pygame.WINDOWPOS_CENTERED
         # borderless: no title bar or buttons. allow_high_dpi: draw at full Retina resolution.
@@ -463,10 +495,24 @@ class LifeInLife:
             if mac is None:
                 pygame.quit()
                 sys.exit(f"--wallpaper: {self.mac_error}")
-            mac.pin(cover_screen=True)
+            mac.pin(frame=self.screen_frame)
             self._start_global_hotkeys()
 
     # ---- helpers
+    def _pick_monitor(self, number):
+        """Size (in points) of monitor `number` (1 = primary). Remembers its frame for pinning."""
+        screens = mac_screens()
+        sizes = ([(int(f.size.width), int(f.size.height)) for _, f in screens] if screens
+                 else pygame.display.get_desktop_sizes())
+        index = number - 1
+        if not 0 <= index < len(sizes):
+            print(f"Note: monitor {number} not found ({len(sizes)} connected); using the primary one.\n"
+                  f"      Run with --list-monitors to see them.")
+            index = 0
+        if screens:
+            self.screen_frame = screens[index][1]
+        return sizes[index]
+
     def _get_mac(self):
         if self.mac is None and self.mac_error is None:
             if sys.platform != "darwin":
@@ -544,7 +590,7 @@ class LifeInLife:
             mac.unwatch_hotkeys()
             self.toast("Interactive  -  Ctrl+Shift+W to pin again", 2.5)
         else:
-            mac.pin(cover_screen=False)
+            mac.pin()
             self._start_global_hotkeys()
             self.show_help = False
             self.toast("Pinned to desktop  -  Ctrl+Shift+W to unpin", 2.5)
@@ -740,6 +786,11 @@ def parse_args():
     p.add_argument("--wallpaper", action="store_true",
                    help="macOS: run as a live wallpaper (behind desktop icons, on all Spaces, "
                         "click-through). Needs pyobjc-framework-Cocoa.")
+    p.add_argument("--monitor", type=int, default=1,
+                   help="with --wallpaper: which monitor to cover, 1 = primary (default), "
+                        "2 = second, ... (see --list-monitors)")
+    p.add_argument("--list-monitors", action="store_true",
+                   help="print the connected monitors and their numbers, then exit")
     p.add_argument("--solid", action="store_true",
                    help="dark background instead of a transparent one")
     p.add_argument("--bg-opacity", type=float, default=0.0,
@@ -764,6 +815,10 @@ def parse_args():
 def main():
     global MACRO_SIZE
     args = parse_args()
+    if args.list_monitors:
+        print("Monitors:")
+        list_monitors()
+        return
     MACRO_SIZE = max(8, args.grid)
     print("Life in Life  -  shortcuts:")
     for keys, what in HELP:

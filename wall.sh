@@ -21,6 +21,10 @@ FPS=30
 # white, black, gray, red, orange, yellow, green, cyan, blue, purple, pink, or a hex like #ff8800
 COLOR=multi
 
+# Which monitor to cover: 1 = primary (the one with the menu bar), 2 = second, 3 = third ...
+# To see the numbers, run:  ./wall.sh --list-monitors
+MONITOR=1
+
 cd "$(dirname "$0")" || exit 1
 PYTHON=".venv-life/bin/python"
 [ -x "$PYTHON" ] || PYTHON="python3"
@@ -32,4 +36,5 @@ exec "$PYTHON" "life inside life.py" --wallpaper \
     --grid "$GRID" \
     --fps "$FPS" \
     --color "$COLOR" \
+    --monitor "$MONITOR" \
     "$@"
