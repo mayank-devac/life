@@ -24,7 +24,7 @@ FPS=30
 
 # Cell colour: multi (every cell its own colour), or one colour for all cells:
 # white, black, gray, red, orange, yellow, green, cyan, blue, purple, pink, mauve, or a hex like #ff8800
-COLOR=white
+COLOR=red
 
 # Which monitor to cover: 1 = primary (the one with the menu bar), 2 = second, 3 = third ...
 # To see the numbers, run:  ./wall.sh --list-monitors
