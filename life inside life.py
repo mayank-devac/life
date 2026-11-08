@@ -12,12 +12,17 @@ import ctypes
 import ctypes.util
 import importlib
 import math
+import os
 import signal
 import sys
 import time
 
 import numpy as np
-import pygame
+
+# macOS: run as a background app, with no Dock icon and no "Python" menu in the menu bar.
+# SDL reads this hint before it creates the app, so the icon never appears.
+os.environ.setdefault("SDL_MAC_BACKGROUND_APP", "1")
+import pygame  # noqa: E402 - must come after the hint above
 from pygame._sdl2.video import Renderer, Texture
 
 # ---------------------------------------------------------------- settings
@@ -115,6 +120,31 @@ def hue_to_rgb(hue, s=0.7, v=1.0):
     return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
 
 
+NAMED_COLORS = {
+    "white": (255, 255, 255), "black": (0, 0, 0), "gray": (128, 128, 128),
+    "red": (235, 64, 52), "orange": (245, 150, 40), "yellow": (245, 220, 60),
+    "green": (70, 200, 90), "cyan": (60, 210, 230), "blue": (60, 120, 240),
+    "purple": (150, 90, 230), "pink": (240, 110, 180),
+}
+
+
+def parse_color(text):
+    """'multi' -> None (every cell its own hue), a name like 'white', or a hex like '#ff8800'."""
+    text = text.strip().lower()
+    if text in ("multi", "multicolor", "rainbow", ""):
+        return None
+    if text in NAMED_COLORS:
+        return NAMED_COLORS[text]
+    hexa = text.lstrip("#")
+    if len(hexa) == 6:
+        try:
+            return tuple(int(hexa[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            pass
+    raise argparse.ArgumentTypeError(
+        f"unknown colour {text!r}: use multi, {', '.join(NAMED_COLORS)}, or a hex like #ff8800")
+
+
 def random_macro():
     grid = np.random.choice([0, 1], size=(MACRO_SIZE, MACRO_SIZE), p=[0.7, 0.3]).astype(np.uint8)
     hue = np.random.random((MACRO_SIZE, MACRO_SIZE))
@@ -194,13 +224,85 @@ def _desktop_level():
         return -2147483623
 
 
-def _accessibility_trusted():
-    try:
-        ax = ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
-        ax.AXIsProcessTrusted.restype = ctypes.c_bool
-        return bool(ax.AXIsProcessTrusted())
-    except (OSError, AttributeError):
-        return True
+def _fourcc(code):
+    return int.from_bytes(code.encode(), "big")
+
+
+class _EventTypeSpec(ctypes.Structure):
+    _fields_ = [("eventClass", ctypes.c_uint32), ("eventKind", ctypes.c_uint32)]
+
+
+class _EventHotKeyID(ctypes.Structure):
+    _fields_ = [("signature", ctypes.c_uint32), ("id", ctypes.c_uint32)]
+
+
+_HOTKEY_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+
+
+class CarbonHotkeys:
+    """System-wide Ctrl+Shift shortcuts via Carbon's RegisterEventHotKey.
+    Unlike an NSEvent global monitor, this needs no Accessibility permission."""
+
+    CONTROL, SHIFT = 0x1000, 0x0200  # Carbon modifier bits (controlKey, shiftKey)
+
+    def __init__(self, on_action):
+        c = self.carbon = ctypes.CDLL("/System/Library/Frameworks/Carbon.framework/Carbon")
+        c.GetApplicationEventTarget.restype = ctypes.c_void_p
+        c.InstallEventHandler.argtypes = [ctypes.c_void_p, _HOTKEY_HANDLER, ctypes.c_ulong,
+                                          ctypes.POINTER(_EventTypeSpec), ctypes.c_void_p,
+                                          ctypes.POINTER(ctypes.c_void_p)]
+        c.InstallEventHandler.restype = ctypes.c_int32
+        c.RemoveEventHandler.argtypes = [ctypes.c_void_p]
+        c.RegisterEventHotKey.argtypes = [ctypes.c_uint32, ctypes.c_uint32, _EventHotKeyID,
+                                          ctypes.c_void_p, ctypes.c_uint32,
+                                          ctypes.POINTER(ctypes.c_void_p)]
+        c.RegisterEventHotKey.restype = ctypes.c_int32
+        c.UnregisterEventHotKey.argtypes = [ctypes.c_void_p]
+        c.GetEventParameter.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+                                        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p,
+                                        ctypes.c_void_p]
+        c.GetEventParameter.restype = ctypes.c_int32
+
+        self.target = c.GetApplicationEventTarget()
+        self.signature = _fourcc("LiLf")
+        self.keycodes = list(MAC_KEYCODES)
+        self.refs = []
+
+        def handler(_call, event, _data):
+            hk = _EventHotKeyID()
+            if c.GetEventParameter(event, _fourcc("----"), _fourcc("hkid"), None,
+                                   ctypes.sizeof(hk), None, ctypes.byref(hk)) == 0:
+                if hk.signature == self.signature and hk.id < len(self.keycodes):
+                    on_action(MAC_KEYCODES[self.keycodes[hk.id]])
+            return 0
+
+        self._handler = _HOTKEY_HANDLER(handler)  # keep a reference so it isn't freed
+        spec = _EventTypeSpec(_fourcc("keyb"), 5)  # kEventClassKeyboard, kEventHotKeyPressed
+        self.handler_ref = ctypes.c_void_p()
+        if c.InstallEventHandler(self.target, self._handler, 1, ctypes.byref(spec), None,
+                                 ctypes.byref(self.handler_ref)) != 0:
+            raise OSError("InstallEventHandler failed")
+
+    def register(self):
+        if self.refs:
+            return
+        for i, code in enumerate(self.keycodes):
+            ref = ctypes.c_void_p()
+            if self.carbon.RegisterEventHotKey(code, self.CONTROL | self.SHIFT,
+                                               _EventHotKeyID(self.signature, i), self.target,
+                                               0, ctypes.byref(ref)) == 0:
+                self.refs.append(ref)
+
+    def unregister(self):
+        for ref in self.refs:
+            self.carbon.UnregisterEventHotKey(ref)
+        self.refs = []
+
+    def close(self):
+        self.unregister()
+        if self.handler_ref:
+            self.carbon.RemoveEventHandler(self.handler_ref)
+            self.handler_ref = ctypes.c_void_p()
 
 
 class MacWindow:
@@ -209,12 +311,14 @@ class MacWindow:
     def __init__(self):
         self.AppKit = importlib.import_module("AppKit")  # ImportError without pyobjc
         self.app = self.AppKit.NSApplication.sharedApplication()
+        # Backup for SDL builds that ignore SDL_MAC_BACKGROUND_APP: no Dock icon, no app menu.
+        self.app.setActivationPolicy_(self.AppKit.NSApplicationActivationPolicyAccessory)
         windows = [w for w in self.app.windows() if w.isVisible()] or list(self.app.windows())
         if not windows:
             raise RuntimeError("couldn't find the game window")
         self.win = windows[0]
         self.normal = (self.win.level(), self.win.collectionBehavior(), self.win.hasShadow())
-        self.monitor = None
+        self.hotkeys = None
         self.pinned = False
         self._fixed_layer = None
 
@@ -276,24 +380,20 @@ class MacWindow:
         self.pinned = False
 
     def watch_hotkeys(self, on_action):
-        """Catch Ctrl+Shift shortcuts typed in other apps (needs Accessibility permission)."""
-        if self.monitor is not None:
-            return
-        A = self.AppKit
-        both = A.NSEventModifierFlagControl | A.NSEventModifierFlagShift
+        """Catch Ctrl+Shift shortcuts typed in other apps while pinned. No permission needed."""
+        if self.hotkeys is None:
+            self.hotkeys = CarbonHotkeys(on_action)
+        self.hotkeys.register()
 
-        def handler(event):
-            if event.modifierFlags() & both == both:
-                action = MAC_KEYCODES.get(event.keyCode())
-                if action:
-                    on_action(action)
-
-        self.monitor = A.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(A.NSEventMaskKeyDown, handler)
+    def unwatch_hotkeys(self):
+        """Release the shortcuts so other apps get Ctrl+Shift+R etc. back."""
+        if self.hotkeys is not None:
+            self.hotkeys.unregister()
 
     def close(self):
-        if self.monitor is not None:
-            self.AppKit.NSEvent.removeMonitor_(self.monitor)
-            self.monitor = None
+        if self.hotkeys is not None:
+            self.hotkeys.close()
+            self.hotkeys = None
 
 
 # ---------------------------------------------------------------- app
@@ -330,8 +430,9 @@ class LifeInLife:
         self.help_tex = None
         self.toast_tex, self.toast_tex_text = None, None
 
+        self.color = args.color  # None = multicolour, else one (r, g, b) for every cell
         self.macro, self.hue = random_macro()
-        self.rgb = hue_to_rgb(self.hue)
+        self.rgb = self.colors()
         self.micro = seed_micro()
         self.history = []  # last two outer generations, for stall detection
         self.stale = 0
@@ -382,15 +483,20 @@ class LifeInLife:
     def _start_global_hotkeys(self):
         if self.mac is None:
             return
-        self.mac.watch_hotkeys(self.pending.append)
-        if not _accessibility_trusted():
-            print("Note: to use Ctrl+Shift shortcuts while pinned, allow your terminal app in\n"
-                  "      System Settings > Privacy & Security > Accessibility, then restart.\n"
-                  "      Ctrl+C in this terminal always quits.")
+        try:
+            self.mac.watch_hotkeys(self.pending.append)
+        except (OSError, AttributeError) as exc:
+            print(f"Note: global shortcuts unavailable ({exc}); Ctrl+C in this terminal quits.")
 
     @property
     def pinned(self):
         return self.mac is not None and self.mac.pinned
+
+    def colors(self):
+        """Per-cell RGB: from each cell's hue, or one fixed colour if --color was given."""
+        if self.color is None:
+            return hue_to_rgb(self.hue)
+        return np.broadcast_to(np.array(self.color, dtype=np.uint8), (*self.hue.shape, 3))
 
     def toast(self, text, seconds=1.6):
         self.toast_text, self.toast_until = text, time.monotonic() + seconds
@@ -399,7 +505,7 @@ class LifeInLife:
 
     def reseed(self):
         self.macro, self.hue = random_macro()
-        self.rgb = hue_to_rgb(self.hue)
+        self.rgb = self.colors()
         self.micro = seed_micro()
         self.history.clear()
         self.stale = 0
@@ -435,6 +541,7 @@ class LifeInLife:
         self.drag_mode = None
         if mac.pinned:
             mac.unpin()
+            mac.unwatch_hotkeys()
             self.toast("Interactive  -  Ctrl+Shift+W to pin again", 2.5)
         else:
             mac.pin(cover_screen=False)
@@ -493,7 +600,7 @@ class LifeInLife:
         self.micro = step_life(self.micro)
         if self.tick % MACRO_EVERY == 0:
             self.macro, self.hue = step_colored(self.macro, self.hue)
-            self.rgb = hue_to_rgb(self.hue)
+            self.rgb = self.colors()
             snapshot = self.macro.tobytes()
             # Empty, frozen, or blinking in place (period 1 or 2): count it as stalled.
             self.stale = self.stale + 1 if (not self.macro.any() or snapshot in self.history) else 0
@@ -615,7 +722,7 @@ class LifeInLife:
         signal.signal(signal.SIGINT, lambda *_: setattr(self, "running", False))
         try:
             while self.running:
-                for event in pygame.event.get():  # also pumps the macOS hotkey monitor
+                for event in pygame.event.get():  # also delivers the macOS global hotkeys
                     self.handle(event)
                 while self.pending:
                     self.do(self.pending.pop(0))
@@ -648,6 +755,9 @@ def parse_args():
     p.add_argument("--grid", type=int, default=MACRO_SIZE,
                    help=f"cells across the world (default {MACRO_SIZE}); fewer = bigger cells")
     p.add_argument("--fps", type=int, default=30, help="frames per second (default 30)")
+    p.add_argument("--color", type=parse_color, default=None,
+                   help=f"cell colour: multi (default, every cell its own hue), "
+                        f"{', '.join(NAMED_COLORS)}, or a hex like #ff8800")
     return p.parse_args()
 
 
