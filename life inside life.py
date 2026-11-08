@@ -216,6 +216,7 @@ class MacWindow:
         self.normal = (self.win.level(), self.win.collectionBehavior(), self.win.hasShadow())
         self.monitor = None
         self.pinned = False
+        self._fixed_layer = None
 
     def make_transparent(self):
         """Let pixels with alpha < 255 show the desktop through (per-pixel transparency)."""
@@ -224,10 +225,22 @@ class MacWindow:
         self.win.setHasShadow_(False)
         self.normal = (self.normal[0], self.normal[1], False)
 
+        self.keep_transparent(force=True)
+
+    def keep_transparent(self, force=False):
+        """macOS creates the content view's backing layer lazily, after the first frame,
+        and gives it an opaque black background, which hides the wallpaper behind it.
+        Called every frame; it only does work when that layer has been (re)created."""
+        root = self.win.contentView().layer()
+        if not force and (root is None or root is self._fixed_layer):
+            return
+        self._fixed_layer = root
+
         def walk(view):
             layer = view.layer()
             if layer is not None:
                 layer.setOpaque_(False)  # SDL's Metal layer is opaque by default
+                layer.setBackgroundColor_(None)
             for sub in view.subviews():
                 walk(sub)
 
@@ -299,9 +312,11 @@ class LifeInLife:
         px_w, px_h = self.renderer.get_viewport().size
         self.dpr = px_w / size[0]
         self.view = View(px_w, px_h)
+        self.view.zoom_at(args.zoom, px_w / 2, px_h / 2)  # start-up scale
 
         self.opacity = max(0.1, min(1.0, args.opacity))
         self.window.opacity = self.opacity
+        self.bg_alpha = round(max(0.0, min(1.0, args.bg_opacity)) * 255)
         self.clock = pygame.time.Clock()
         self.fps = args.fps
 
@@ -493,6 +508,8 @@ class LifeInLife:
         v, ren = self.view, self.renderer
         if not self.transparent:
             ren.draw_color = SOLID_BG
+        elif self.bg_alpha > 0:
+            ren.draw_color = (*SOLID_BG[:3], self.bg_alpha)  # tinted see-through backdrop
         elif self.pinned:
             ren.draw_color = CLEAR_BG
         else:
@@ -542,6 +559,8 @@ class LifeInLife:
             if now < self.toast_until:
                 self._draw_toast()
 
+        if self.transparent and self.mac is not None:
+            self.mac.keep_transparent()
         ren.present()
 
     def _panel_surface(self, w, h):
@@ -616,15 +635,26 @@ def parse_args():
                         "click-through). Needs pyobjc-framework-Cocoa.")
     p.add_argument("--solid", action="store_true",
                    help="dark background instead of a transparent one")
+    p.add_argument("--bg-opacity", type=float, default=0.0,
+                   help="darkness of the background behind the cells, 0-1 "
+                        "(default 0 = fully clear, your wallpaper shows through)")
     p.add_argument("--opacity", type=float, default=1.0,
                    help="opacity of the whole window, 0.1-1.0 (default 1.0)")
-    p.add_argument("--size", type=int, default=800, help="window size in points (default 800)")
+    p.add_argument("--size", type=int, default=800,
+                   help="window size in points (default 800; --wallpaper always fills the screen)")
+    p.add_argument("--zoom", type=float, default=1.0,
+                   help=f"start-up scale {MIN_ZOOM:g}-{MAX_ZOOM:g}: bigger = larger cells "
+                        f"(inner life shows from {DETAIL_ZOOM})")
+    p.add_argument("--grid", type=int, default=MACRO_SIZE,
+                   help=f"cells across the world (default {MACRO_SIZE}); fewer = bigger cells")
     p.add_argument("--fps", type=int, default=30, help="frames per second (default 30)")
     return p.parse_args()
 
 
 def main():
+    global MACRO_SIZE
     args = parse_args()
+    MACRO_SIZE = max(8, args.grid)
     print("Life in Life  -  shortcuts:")
     for keys, what in HELP:
         print(f"  {keys:<30} {what}")
