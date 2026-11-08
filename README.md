@@ -135,3 +135,5 @@ lifeinlife/
   mac/visibility.py      screen locked / display asleep checks
 tests/                   python -m unittest discover -s tests -t .
 ```
+
+>Tested on macOS; it may also work on Windows, though this has not been fully verified.
