@@ -23,6 +23,7 @@ APP="$HOME/Library/Application Support/life-wallpaper"
 WALL="$APP/wall.sh"
 DOMAIN="gui/$(id -u)"
 FILES=("life inside life.py" "wall.sh" "requirements.txt")
+PACKAGE="lifeinlife"   # the code; copied whole, minus __pycache__
 
 # Escape text for use inside the plist's XML (& < > in a path would break it).
 xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
@@ -31,6 +32,7 @@ install() {
     for f in "${FILES[@]}"; do
         [ -f "$SRC/$f" ] || { echo "$f not found in $SRC"; exit 1; }
     done
+    [ -d "$SRC/$PACKAGE" ] || { echo "$PACKAGE/ not found in $SRC"; exit 1; }
     mkdir -p "$APP" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 
     # Stop the running copy before replacing its files.
@@ -40,6 +42,10 @@ install() {
     for f in "${FILES[@]}"; do
         cp "$SRC/$f" "$APP/$f" || { echo "Couldn't copy $f"; exit 1; }
     done
+    # Replace the package whole, so files deleted from the repo don't linger in the copy.
+    rm -rf "${APP:?}/$PACKAGE"
+    cp -R "$SRC/$PACKAGE" "$APP/$PACKAGE" || { echo "Couldn't copy $PACKAGE/"; exit 1; }
+    find "$APP/$PACKAGE" -name __pycache__ -type d -prune -exec rm -rf {} +
     chmod +x "$WALL"
 
     # wall.sh looks for .venv-life next to itself.
@@ -72,6 +78,9 @@ install() {
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- wall.sh trims this log when it grows past 1 MB -->
+        <key>LIFE_LOG</key>
+        <string>$(xml "$LOG")</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

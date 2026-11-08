@@ -12,7 +12,7 @@ BG_OPACITY=0
 OPACITY=0.7
 
 # Scale: bigger = larger cells (1 to 8). From 2.2 up, the inner Game of Life shows inside each cell.
-# Below 2.2 it uses almost no CPU (it only redraws when the world changes); above, it redraws every frame.
+# Below 2.2 it uses almost no CPU (it wakes ~2x a second, when the world changes); above, every frame.
 ZOOM=1
 
 # World size: how many cells across. Fewer = bigger cells and bigger patterns.
@@ -30,6 +30,14 @@ COLOR=multi
 MONITOR=2
 
 cd "$(dirname "$0")" || exit 1
+
+# Started by login.sh: keep its log from growing forever. Trim in place (rewrite the same
+# file, not replace it) because launchd already has it open for this run's output.
+if [ -n "$LIFE_LOG" ] && [ -f "$LIFE_LOG" ] && [ "$(stat -f %z "$LIFE_LOG")" -gt 1048576 ]; then
+    tail -c 262144 "$LIFE_LOG" > "$LIFE_LOG.tmp" && cat "$LIFE_LOG.tmp" > "$LIFE_LOG"
+    rm -f "$LIFE_LOG.tmp"
+fi
+
 PYTHON=".venv-life/bin/python"
 [ -x "$PYTHON" ] || PYTHON="python3"
 
