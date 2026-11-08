@@ -3,9 +3,11 @@
 Conway's Game of Life where every live cell contains another Game of Life — a recursive, colorful cellular automaton rendered with pygame, zoomable in real time.
 And you can keep the game as your wallpaper.
 
+<div align="center"><img src="docs/life_running.png" alt="life running" width="1000"></div>
+
 ## Demo
-<div align="right"><sub>▶ Click image to watch the demo (56s, 6.8 MB)</sub></div>
-<div align="center"><a href="docs/life0.mp4"><img src="docs/life_running.png" alt="Watch the demo video (56s)" width="1000"></a></div>
+
+<div align="center"><img src="docs/life.gif" alt="life demo" width="1000"></div>
 
 ## Run
 
