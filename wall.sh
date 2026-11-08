@@ -38,7 +38,7 @@ EFFECTS=1
 
 # Cell colour: multi (every cell its own colour), a theme (heat, ocean, neon, forest,
 # sunset, ice: like multi, but along that gradient), or one colour for all cells: white, black, gray, red, orange, yellow, green, cyan, blue, purple, pink, mauve, or a hex like #ff8800
-COLOR=red
+COLOR=multi
 
 # Which monitor to cover: 1 = primary (the one with the menu bar), 2 = second, 3 = third ...
 # To see the numbers, run:  ./wall.sh --list-monitors
