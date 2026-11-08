@@ -23,7 +23,7 @@ GRID=144
 FPS=30
 
 # Speed: outer generations per second (0.5, 1, 2, 4, 8 ... at most FPS).
-SPEED=2
+SPEED=15
 
 # Rules: conway, highlife, daynight, seeds, maze, lifewithoutdeath, morley, diamoeba,
 # or B/S notation like B36/S23. INNER_RULE is for the little worlds inside each cell.

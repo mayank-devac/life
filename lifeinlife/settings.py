@@ -108,7 +108,7 @@ def parse_speed(text):
     return value
 
 
-def choose(color, monitor, speed=2, progress=None):
+def choose(color, monitor, speed=15, progress=None):
     """Ask for a colour, then a speed, then a monitor (skipped with only one screen).
     `color` is the current colour's text ("multi", "heat", "red", "#ff8800"), `speed` the
     outer generations per second, `monitor` its number. `progress(text)`, if given, is
