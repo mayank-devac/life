@@ -41,7 +41,8 @@ def random_grid(size, density=DENSITY):
 
 def random_inner(count, m=MICRO_SIZE):
     """`count` random inner worlds, shape (count, m, m)."""
-    return (np.random.random((count, m, m)) < INNER_DENSITY).astype(np.uint8)
+    # Random bytes instead of float64s: 8x less memory churn (matters for 144*144 worlds).
+    return (np.random.randint(0, 256, (count, m, m), dtype=np.uint8) < round(INNER_DENSITY * 256)).astype(np.uint8)
 
 
 def find_parents(old, rows, cols, wrap=True):
@@ -326,8 +327,10 @@ class World:
             new = step(old, self.rule, self.wrap)
         else:
             new, self.hue = step_colored(old, self.hue, self.rule, self.wrap)
-            self.rgb = colorize(self.hue, self.color)
         born = (new == 1) & (old == 0)
+        if self.hue is not None and born.any():
+            # Hues only change on newborns, so recolour just those (in place).
+            self.rgb[born] = colorize(self.hue[born], self.color)
         died = (new == 0) & (old == 1)
         if born.any():
             self._inherit_inner(old, born)
@@ -361,7 +364,11 @@ class World:
         rows, cols = np.nonzero(born)
         pr, pc = find_parents(old, rows, cols, self.wrap)
         has = pr >= 0
-        worlds = random_inner(rows.size, self.micro_size)  # only kept where there's no parent
+        m = self.micro_size
+        worlds = np.empty((rows.size, m, m), dtype=np.uint8)
         worlds[has] = self.inner[pr[has], pc[has]]
+        orphans = int((~has).sum())
+        if orphans:  # no parent to copy: a fresh random world
+            worlds[~has] = random_inner(orphans, m)
         flips = np.random.random(worlds.shape) < INNER_MUTATION
         self.inner[rows, cols] = worlds ^ flips.astype(np.uint8)

@@ -69,10 +69,17 @@ install() {
         echo "Creating Python environment with $("$py" --version 2>&1)"
         "$py" -m venv "$venv" || { echo "Couldn't create $venv"; exit 1; }
     fi
-    echo "Installing requirements (first time takes a minute)"
-    "$venv/bin/python" -m pip install -q --disable-pip-version-check -r "$APP/requirements.txt" \
-        || { echo "pip install failed"; exit 1; }
-
+    # pip is the heavy part (CPU spike): skip it when requirements.txt hasn't changed.
+    local stamp="$venv/.requirements.sha" want
+    want="$(shasum "$APP/requirements.txt" | cut -d' ' -f1)"
+    if [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
+        echo "Installing requirements (first time takes a minute)"
+        "$venv/bin/python" -m pip install -q --disable-pip-version-check -r "$APP/requirements.txt" \
+            || { echo "pip install failed"; exit 1; }
+        echo "$want" > "$stamp"
+    fi
+    # Compile now, so the first start doesn't spend CPU doing it.
+    "$venv/bin/python" -m compileall -q "$APP/$PACKAGE" >/dev/null 2>&1
     start
     echo "Installed: Life wallpaper will start at every login (running now)."
     echo "Log: $LOG"
