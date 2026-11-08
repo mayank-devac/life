@@ -11,15 +11,35 @@ And you can keep the game as your wallpaper.
 
 ## Install
 
-One command, no clone or venv needed:
+**Needs:** Python 3.10 or newer, plus [pipx](https://pipx.pypa.io) (`brew install pipx`) or
+[uv](https://docs.astral.sh/uv/) (`brew install uv`). uv downloads a Python for you if you don't have one.
+
+Install, then start it at every login (macOS). No clone or venv needed:
 
 ```sh
 pipx install git+https://github.com/mayank-devac/life    # or: uv tool install git+https://github.com/mayank-devac/life
-life --wallpaper     # live wallpaper behind desktop icons (macOS)
-life --help          # every option
+life --login install      # wallpaper now, and at every login
 ```
 
-If `life` is installed, `./login.sh install` (from a clone) uses it instead of copying the code.
+Other commands:
+
+```sh
+life                      # transparent floating window
+life --wallpaper          # live wallpaper, just this once (macOS)
+life --help               # every option
+
+life --login status       # is it installed / running?
+life --login              # settings window: colour, speed, monitor
+life --login color mauve  # or set them directly: speed 4, monitor 2
+life --login monitors     # list monitors and their numbers
+life --login reset        # forget colour / speed / monitor choices
+life --login uninstall    # stop starting at login
+```
+
+Update with `pipx upgrade lifeinlife` (or `uv tool upgrade lifeinlife`).
+
+`life --login …` takes the same commands as `./login.sh` below. From a clone, `./login.sh install`
+also uses the installed `life` if there is one, instead of copying the code.
 
 ## Run from a clone
 
@@ -140,7 +160,8 @@ lifeinlife/
   view.py                zoom / pan / resize maths
   render.py              drawing: world texture, inner worlds, help, toasts
   app.py                 window, input, actions, main loop
-  cli.py                 command-line options
+  cli.py                 command-line options, life --login
+  login.sh, wall.sh      start-at-login and wallpaper scripts (the repo root links to these)
   mac/window.py          transparent + pinned window, monitor list
   mac/hotkeys.py         system-wide shortcuts (no permission prompt)
   mac/hud.py             control panel: step back, play/pause, faster, pin

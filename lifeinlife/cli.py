@@ -1,5 +1,10 @@
 """Command-line arguments and main()."""
 import argparse
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 from .colors import NAMED_COLORS, THEMES, parse_color
 from .config import DEFAULT_GRID, DEFAULT_SPEED, DETAIL_ZOOM, HELP, MAX_ZOOM, MIN_GRID, MIN_ZOOM
@@ -52,6 +57,10 @@ def parse_args(argv=None):
     p.add_argument("--settings", action="store_true",
                    help="open the colour / speed / monitor picker, save the choice for wall.sh, "
                         "then exit (Ctrl+Shift+S does the same while it runs)")
+    p.add_argument("--login", nargs="*", metavar="COMMAND",
+                   help="macOS: start the wallpaper at every login. --login install | uninstall | "
+                        "status | color <name> | speed <n> | monitor <n> | monitors | reset "
+                        "(no command: the settings window). Must come first.")
     args = p.parse_args(argv)
     args.grid = max(MIN_GRID, args.grid)
     args.fps = max(1, args.fps)
@@ -87,8 +96,32 @@ def list_monitors():
     pygame.quit()
 
 
+def run_login(commands):
+    """life --login ...: run login.sh, which ships inside the package, using this `life`."""
+    if sys.platform != "darwin":
+        raise SystemExit("--login is macOS only.")
+    script = Path(__file__).resolve().parent / "login.sh"
+    if not script.is_file():
+        raise SystemExit(f"login.sh is missing from {script.parent}")
+    env = dict(os.environ, LIFE_LOGIN_CMD="life --login")
+    env.pop("LIFE_FROM_SOURCE", None)  # there's no source to copy here, only this installed `life`
+    if "LIFE_BIN" not in env:
+        # The command that was typed (e.g. ~/.local/bin/life, a stable link), not the venv it points into.
+        me = Path(sys.argv[0])
+        bin_path = str(me.absolute()) if me.name == "life" and me.exists() else shutil.which("life")
+        if not bin_path:
+            raise SystemExit("Can't find the `life` command on PATH; set LIFE_BIN=/path/to/life")
+        env["LIFE_BIN"] = bin_path
+    raise SystemExit(subprocess.call(["/bin/bash", str(script), *commands], env=env))
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["--login"]:
+        run_login(argv[1:])
     args = parse_args(argv)
+    if args.login is not None:
+        raise SystemExit("--login must come first:  life --login install")
     if args.list_monitors:
         print("Monitors:")
         list_monitors()

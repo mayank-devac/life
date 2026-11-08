@@ -22,3 +22,6 @@ life = "lifeinlife.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["lifeinlife*"]
+
+[tool.setuptools.package-data]
+lifeinlife = ["*.sh"]  # login.sh and wall.sh, for  life --login
