@@ -13,6 +13,7 @@ class ParseColor(unittest.TestCase):
     def test_values(self):
         self.assertIsNone(parse_color("multi"))
         self.assertEqual(parse_color("White"), (255, 255, 255))
+        self.assertEqual(parse_color("mauve"), (224, 176, 255))
         self.assertEqual(parse_color("#ff8800"), (255, 136, 0))
         self.assertEqual(parse_color("00ff00"), (0, 255, 0))
 

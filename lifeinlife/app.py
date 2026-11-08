@@ -10,13 +10,17 @@ The main loop is event-driven, not a fixed 30 fps spin:
 Time is kept with a frame clock (`next_tick`), so the speed is the same either way.
 """
 import math
+import queue
 import signal
 import sys
+import threading
 import time
 
 import pygame
 from pygame._sdl2.video import Renderer
 
+from . import settings
+from .colors import parse_color
 from .config import (CLEAR_BG, CLICKABLE_BG, HIDDEN_WAIT, MACRO_EVERY, MAX_WAIT, PINNED_WAIT,
                      SCREEN_POLL, SOLID_BG, SYSTEM_POLL)
 from .render import Painter
@@ -30,6 +34,7 @@ PYGAME_KEYS = {
     pygame.K_h: "help",
     pygame.K_SPACE: "pause",
     pygame.K_r: "reseed",
+    pygame.K_s: "settings",
     pygame.K_UP: "opacity+",
     pygame.K_DOWN: "opacity-",
     pygame.K_EQUALS: "zoom+",
@@ -49,6 +54,10 @@ class LifeInLife:
         self.WAKE = pygame.event.custom_type()  # posted by global hotkeys to end a wait early
         self.wallpaper_mode = args.wallpaper
         self.monitor = args.monitor
+        self.color_name = args.color_name
+        self.dialog = None     # thread running the Ctrl+Shift+S settings dialog
+        self.picked = queue.SimpleQueue()  # its answer, handed to the main loop thread-safely
+        self.woken = threading.Event()     # set by that thread to cut a pinned / hidden sleep short
         self.screen_frame = None  # NSRect of the monitor the wallpaper covers
         if args.wallpaper:
             size, pos = self._pick_monitor(args.monitor), (0, 0)
@@ -208,6 +217,48 @@ class LifeInLife:
             self.view.zoom_at(1.25 if action == "zoom+" else 0.8, self.view.w / 2, self.view.h / 2)
         elif action == "wallpaper":
             self.toggle_wallpaper()
+        elif action == "settings":
+            self.open_settings()
+
+    def open_settings(self):
+        """Show the colour / monitor dialog. It runs in its own thread (osascript blocks
+        until it's answered) so the wallpaper keeps going meanwhile."""
+        if self.dialog is not None and self.dialog.is_alive():
+            return  # already open
+        color, monitor = self.color_name, self.monitor
+
+        def ask():
+            picked = settings.choose(color, monitor)
+            if picked is not None:
+                self.picked.put(picked)  # the main loop applies it (pygame isn't thread-safe)
+                self.woken.set()         # end a pinned / hidden sleep now
+                try:
+                    pygame.event.post(pygame.event.Event(self.WAKE))  # end event.wait() now
+                except pygame.error:
+                    pass  # still applied on the next wake-up, at most MAX_WAIT later
+
+        self.dialog = threading.Thread(target=ask, name="settings-dialog", daemon=True)
+        self.dialog.start()
+
+    def apply_settings(self, color_name, monitor):
+        """Apply a choice from the dialog right away, and save it for the next start."""
+        self.world.set_color(parse_color(color_name))  # the dialog already checked it
+        self.color_name = color_name
+        if monitor != self.monitor:
+            self.monitor = monitor
+            if self.wallpaper_mode:
+                # Cover the new monitor, pinned or not. The frame carries its size and
+                # position, so a different resolution is picked up too (via WINDOWSIZECHANGED).
+                self._pick_monitor(monitor)
+                if self.mac is not None and self.screen_frame is not None:
+                    self.mac.set_frame(self.screen_frame)
+                    self._sync_size()
+        self.painter.invalidate()
+        try:
+            settings.save(color=color_name, monitor=monitor)
+            self.toast(f"Colour {color_name}  -  monitor {monitor}", 2.5)
+        except OSError as exc:
+            self.toast(f"Applied, but couldn't save it ({exc.strerror})", 3.5)
 
     def toggle_wallpaper(self):
         mac = self._get_mac()
@@ -365,7 +416,9 @@ class LifeInLife:
             # No mouse or keyboard input reaches a pinned window, only the global hotkeys,
             # which arrive on the next event pump. A plain sleep costs ~3% less CPU than
             # pygame.event.wait(), which keeps waking up inside SDL (measured, SDL 2.32).
-            time.sleep(min(timeout, PINNED_WAIT if self.pinned else HIDDEN_WAIT))
+            # An Event wait costs the same as a sleep but the settings dialog can end it early.
+            self.woken.wait(min(timeout, PINNED_WAIT if self.pinned else HIDDEN_WAIT))
+            self.woken.clear()
             return
         # Round up: waking a hair early would just loop round and wait again.
         event = pygame.event.wait(math.ceil(timeout * 1000))
@@ -386,6 +439,8 @@ class LifeInLife:
                     self.handle(event)
                 while self.pending:
                     self.do(self.pending.pop(0))
+                while not self.picked.empty():
+                    self.apply_settings(*self.picked.get())
                 now = time.monotonic()
                 self._poll_system(now)
                 if not self.hidden:

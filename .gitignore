@@ -13,3 +13,7 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# Colour / monitor picked with Ctrl+Shift+S or ./login.sh
+settings
+settings.tmp

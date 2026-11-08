@@ -2,6 +2,7 @@
 # Run Life in Life as a live wallpaper over your macOS desktop picture.
 # Edit the values below, then run:  ./wall.sh
 # Stop it with Ctrl+C here, or Ctrl+Shift+Esc. Ctrl+Shift+W unpins it so the other shortcuts work.
+# Ctrl+Shift+S picks colour and monitor in a small window, live (and remembers it).
 # To start it at every login, see login.sh.
 
 # Background darkness behind the cells: 0 = fully clear (your wallpaper shows), 1 = solid black
@@ -22,8 +23,8 @@ GRID=98
 FPS=30
 
 # Cell colour: multi (every cell its own colour), or one colour for all cells:
-# white, black, gray, red, orange, yellow, green, cyan, blue, purple, pink, or a hex like #ff8800
-COLOR=multi
+# white, black, gray, red, orange, yellow, green, cyan, blue, purple, pink, mauve, or a hex like #ff8800
+COLOR=white
 
 # Which monitor to cover: 1 = primary (the one with the menu bar), 2 = second, 3 = third ...
 # To see the numbers, run:  ./wall.sh --list-monitors
@@ -38,6 +39,15 @@ if [ -n "$LIFE_LOG" ] && [ -f "$LIFE_LOG" ] && [ "$(stat -f %z "$LIFE_LOG")" -gt
     rm -f "$LIFE_LOG.tmp"
 fi
 
+# Colour / monitor picked with Ctrl+Shift+S (or ./login.sh) are saved in ./settings and
+# passed after the values above, so they win. ./login.sh reset (or deleting it) undoes that.
+SAVED=()
+if [ -f settings ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in color|monitor) [ -n "$value" ] && SAVED+=("--$key" "$value") ;; esac
+    done < settings
+fi
+
 PYTHON=".venv-life/bin/python"
 [ -x "$PYTHON" ] || PYTHON="python3"
 
@@ -49,4 +59,5 @@ exec "$PYTHON" "life inside life.py" --wallpaper \
     --fps "$FPS" \
     --color "$COLOR" \
     --monitor "$MONITOR" \
+    "${SAVED[@]}" \
     "$@"

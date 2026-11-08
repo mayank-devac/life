@@ -28,12 +28,30 @@ Edit the settings at the top of `wall.sh` (opacity, colour, monitor, zoom…), t
 Python environment, because macOS won't let login items read Downloads, Desktop or Documents.
 After editing `wall.sh`, run `./login.sh install` again to apply it. Logs: `~/Library/Logs/life-wallpaper.log`.
 
+### Change colour or monitor (no need to edit `wall.sh`)
+
+Press **`Ctrl+Shift + S`** while it's running (pinned or not): a small window asks for a
+colour, then a monitor, and the wallpaper changes on the spot. From the terminal:
+
+```sh
+./login.sh                # the same window
+./login.sh color mauve    # or straight from the terminal (a hex like ff8800 works too)
+./login.sh monitor 2
+./login.sh monitors       # list monitors and their numbers
+./login.sh reset          # go back to the values in wall.sh
+```
+
+Changes apply right away and stick across logins (and across `./login.sh install`): they're
+saved in a `settings` file next to `wall.sh`, which wins over the values written in `wall.sh`.
+If it isn't installed yet, these install it first.
+
 ## Controls
 
 | Key | Action |
 |---|---|
 | `Ctrl+Shift + Space` | pause / resume |
 | `Ctrl+Shift + R` | new random world |
+| `Ctrl+Shift + S` | settings: colour and monitor |
 | **`Ctrl+Shift + W`** | **pin to desktop (wallpaper) / unpin** |
 | `Ctrl+Shift + Up / Down` | opacity |
 | Scroll / `Ctrl+Shift + = -` | zoom |
@@ -41,8 +59,8 @@ After editing `wall.sh`, run `./login.sh install` again to apply it. Logs: `~/Li
 | `Ctrl+Shift + Esc` | quit |
 
 > [!IMPORTANT]
-> **`Ctrl+Shift + W` is the key to remember.** While pinned as a wallpaper, only `Ctrl+Shift + W`
-> and `Ctrl+Shift + Esc` are captured system-wide, so other apps keep their shortcuts.
+> **`Ctrl+Shift + W` is the key to remember.** While pinned as a wallpaper, only `Ctrl+Shift + W`,
+> `Ctrl+Shift + S` and `Ctrl+Shift + Esc` are captured system-wide, so other apps keep their shortcuts.
 > Press **`Ctrl+Shift + W`** to unpin and get the rest of the controls back.
 
 ## As a wallpaper, it stays out of the way
@@ -61,6 +79,7 @@ life inside life.py      launcher (kept so the commands above stay the same)
 lifeinlife/
   config.py              constants: sizes, speeds, colours, help text
   colors.py              --color parsing, hue -> RGB
+  settings.py            Ctrl+Shift+S dialog, saved colour / monitor
   world.py               the simulation (numpy only, no pygame)
   view.py                zoom / pan / resize maths
   render.py              drawing: world texture, inner worlds, help, toasts

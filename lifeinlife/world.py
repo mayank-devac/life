@@ -68,18 +68,22 @@ class World:
 
     def reseed(self):
         self.macro = random_grid(self.size)
-        if self.color is None:
+        self.set_color(self.color)  # also bumps generation (once per reseed)
+        self.micro = seed_micro()
+        self.history = []  # last two outer generations, for stall detection
+        self.stale = 0
+
+    def set_color(self, color):
+        """Recolour the world as it is (no reseed): None = every cell its own hue."""
+        self.color = color
+        if color is None:
             self.hue = np.random.random((self.size, self.size))
             self.rgb = hue_to_rgb(self.hue)
         else:
             # One colour for everything: no hues to track or blend, and rgb never changes.
             self.hue = None
-            self.rgb = np.broadcast_to(np.array(self.color, dtype=np.uint8),
-                                       (self.size, self.size, 3))
-        self.micro = seed_micro()
-        self.history = []  # last two outer generations, for stall detection
-        self.stale = 0
-        self.generation += 1
+            self.rgb = np.broadcast_to(np.array(color, dtype=np.uint8), (self.size, self.size, 3))
+        self.generation += 1  # the renderer's cached texture is out of date
 
     def frames_to_macro_step(self):
         """How many step() calls happen before the one that also steps the outer world.

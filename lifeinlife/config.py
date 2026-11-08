@@ -39,13 +39,15 @@ HELP = [
     ("Ctrl+Shift + Up / Down", "opacity"),
     ("Ctrl+Shift + Space", "pause / resume"),
     ("Ctrl+Shift + R", "new random world"),
+    ("Ctrl+Shift + S", "settings: colour and monitor"),
     ("Ctrl+Shift + W", "pin to desktop (wallpaper) / unpin"),
     ("Ctrl+Shift + H", "show / hide help"),
     ("Ctrl+Shift + Esc", "quit"),
-    ("While pinned", "only Ctrl+Shift + W and Esc work"),
+    ("While pinned", "only Ctrl+Shift + W, S and Esc work"),
 ]
 
 # While pinned the window never has focus, so shortcuts must be grabbed system-wide, which
-# takes them away from every other app. Only grab the two needed to get out: quit (Esc) and
-# unpin (W). Everything else works again once unpinned. Keys are macOS virtual key codes.
-MAC_KEYCODES = {53: "quit", 13: "wallpaper"}
+# takes them away from every other app. Only grab the few needed while pinned: quit (Esc),
+# unpin (W) and settings (S). Everything else works again once unpinned.
+# Keys are macOS virtual key codes.
+MAC_KEYCODES = {53: "quit", 13: "wallpaper", 1: "settings"}

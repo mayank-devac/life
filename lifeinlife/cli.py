@@ -31,11 +31,19 @@ def parse_args(argv=None):
                    help=f"cells across the world (default {DEFAULT_GRID}, min {MIN_GRID}); "
                         f"fewer = bigger cells")
     p.add_argument("--fps", type=int, default=30, help="frames per second (default 30)")
-    p.add_argument("--color", type=parse_color, default=None,
+    p.add_argument("--color", default="multi",
                    help=f"cell colour: multi (default, every cell its own hue), "
                         f"{', '.join(NAMED_COLORS)}, or a hex like #ff8800")
+    p.add_argument("--settings", action="store_true",
+                   help="open the colour / monitor picker, save the choice for wall.sh, then exit "
+                        "(Ctrl+Shift+S does the same while it runs)")
     args = p.parse_args(argv)
     args.grid = max(MIN_GRID, args.grid)
+    args.color_name = args.color  # the text, to show and save; args.color is the parsed value
+    try:
+        args.color = parse_color(args.color)
+    except argparse.ArgumentTypeError as exc:
+        p.error(f"argument --color: {exc}")
     return args
 
 
@@ -59,6 +67,15 @@ def main(argv=None):
     if args.list_monitors:
         print("Monitors:")
         list_monitors()
+        return
+    if args.settings:
+        from . import settings  # noqa: PLC0415
+        picked = settings.choose(args.color_name, args.monitor)
+        if picked is None:
+            print("Cancelled.")
+            raise SystemExit(1)
+        settings.save(color=picked[0], monitor=picked[1])
+        print(f"Saved: colour {picked[0]}, monitor {picked[1]}")
         return
     print("Life in Life  -  shortcuts:")
     for keys, what in HELP:
