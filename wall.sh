@@ -27,7 +27,7 @@ COLOR=multi
 
 # Which monitor to cover: 1 = primary (the one with the menu bar), 2 = second, 3 = third ...
 # To see the numbers, run:  ./wall.sh --list-monitors
-MONITOR=2
+MONITOR=1
 
 cd "$(dirname "$0")" || exit 1
 

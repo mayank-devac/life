@@ -34,14 +34,16 @@ After editing `wall.sh`, run `./login.sh install` again to apply it. Logs: `~/Li
 |---|---|
 | `Ctrl+Shift + Space` | pause / resume |
 | `Ctrl+Shift + R` | new random world |
-| `Ctrl+Shift + W` | pin to desktop (wallpaper) / unpin |
+| **`Ctrl+Shift + W`** | **pin to desktop (wallpaper) / unpin** |
 | `Ctrl+Shift + Up / Down` | opacity |
 | Scroll / `Ctrl+Shift + = -` | zoom |
 | `Ctrl+Shift + H` | help |
 | `Ctrl+Shift + Esc` | quit |
 
-While pinned as a wallpaper, only `Ctrl+Shift + W` and `Ctrl+Shift + Esc` are captured system-wide,
-so other apps keep their shortcuts. Unpin with `Ctrl+Shift + W` to use the rest.
+> [!IMPORTANT]
+> **`Ctrl+Shift + W` is the key to remember.** While pinned as a wallpaper, only `Ctrl+Shift + W`
+> and `Ctrl+Shift + Esc` are captured system-wide, so other apps keep their shortcuts.
+> Press **`Ctrl+Shift + W`** to unpin and get the rest of the controls back.
 
 ## As a wallpaper, it stays out of the way
 
