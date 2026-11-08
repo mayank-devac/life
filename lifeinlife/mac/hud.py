@@ -35,6 +35,30 @@ H = 8 + LINES * LINE_H + 6 + 26 + 6
 SMALL_W, SMALL_H = 44, 40   # unpinned with the panel hidden: just the eye button
 
 
+def _screen_of(win):
+    """The monitor under the middle of `win` (the wallpaper's monitor). Not just
+    win.screen(): that can be None while macOS moves the window around (sleep, a monitor
+    reconnecting), and NSScreen.mainScreen() is the monitor you're working on, not the
+    wallpaper's."""
+    f = win.frame()
+    mid = (f.origin.x + f.size.width / 2, f.origin.y + f.size.height / 2)
+    for screen in NSScreen.screens() or []:
+        s = screen.frame()
+        if (s.origin.x <= mid[0] < s.origin.x + s.size.width
+                and s.origin.y <= mid[1] < s.origin.y + s.size.height):
+            return screen
+    return win.screen() or NSScreen.mainScreen()
+
+
+def _screen_name(screen):
+    """"LG ULTRAGEAR": the key for the panel's spot on that monitor."""
+    try:
+        return str(screen.localizedName())  # macOS 10.15+
+    except AttributeError:
+        f = screen.frame()
+        return f"screen {int(f.origin.x)},{int(f.origin.y)}"
+
+
 def _icon_level():
     """One above kCGDesktopIconWindowLevel: over the desktop icons, under app windows."""
     try:
@@ -69,9 +93,12 @@ class _HudMoved(Foundation.NSObject):
 
 class Hud:
     """`on_action(name)` is called with "back", "pause", "faster", "slower"
-    or "wallpaper" (on the main thread, while SDL pumps events, like the global hotkeys)."""
+    or "wallpaper" (on the main thread, while SDL pumps events, like the global hotkeys).
+    `spots` is where the user left the panel on each monitor ({monitor name: (dx, dy)}
+    from its top-left corner, as saved in the settings file); `on_moved(spots)` is told
+    after every drag, to save them."""
 
-    def __init__(self, on_action):
+    def __init__(self, on_action, spots=None, on_moved=None):
         self.panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, W, H),
             AppKit.NSWindowStyleMaskBorderless | AppKit.NSWindowStyleMaskNonactivatingPanel,
@@ -89,7 +116,9 @@ class Hud:
         p.setReleasedWhenClosed_(False)
         p.setMovableByWindowBackground_(True)  # drag the panel by its background / labels
 
-        self.offset = None     # where the user dragged it while pinned: (dx, dy) from the screen's top-left
+        self.spots = dict(spots or {})  # where the user dragged it, per monitor: {name: (dx, dy)} from its top-left
+        self.on_moved = on_moved or (lambda _spots: None)
+        self.screen_name = None  # the monitor it was last placed on
         self.placing = False   # True while we move it ourselves, so that isn't taken for a drag
         self.pinned = False
         self.hidden = False    # the user hid the panel: pinned, it vanishes; unpinned, only the eye stays
@@ -161,14 +190,13 @@ class Hud:
         along with it as a child window."""
         # The same spot pinned or not: the screen's top-left corner, below the menu bar
         # (or wherever the user dragged it).
-        screen = win.screen() or NSScreen.mainScreen()
+        screen = _screen_of(win)
         if screen is None:
             return
-        area = screen.visibleFrame()
-        if self.area is not None and (self.area.origin.x, self.area.origin.y) != (
-                area.origin.x, area.origin.y):
-            self.offset = None  # another monitor: back to the corner
-        self.area = area
+        # Each monitor keeps its own spot, so a trip to another monitor (macOS moves the
+        # wallpaper while one is slow to wake) doesn't lose it.
+        self.area = screen.visibleFrame()
+        self.screen_name = _screen_name(screen)
         if pinned:
             self._detach()
             self.panel.setLevel_(_icon_level())
@@ -185,7 +213,10 @@ class Hud:
     def _position(self):
         if self.area is None:
             return
-        dx, dy = self.offset if self.offset is not None else (MARGIN, MARGIN)
+        dx, dy = self.spots.get(self.screen_name, (MARGIN, MARGIN))
+        # Still fully on screen if the monitor is now smaller, or the Dock / menu bar grew.
+        dx = max(0, min(dx, self.area.size.width - self.w))
+        dy = max(0, min(dy, self.area.size.height - self.h))
         origin = (self.area.origin.x + dx, self.area.origin.y + self.area.size.height - dy - self.h)
         self.placing = True
         try:
@@ -198,8 +229,9 @@ class Hud:
         if self.placing or self.area is None:
             return
         o = self.panel.frame().origin
-        self.offset = (o.x - self.area.origin.x,
-                       self.area.origin.y + self.area.size.height - o.y - self.h)
+        self.spots[self.screen_name] = (round(o.x - self.area.origin.x),
+                                        round(self.area.origin.y + self.area.size.height - o.y - self.h))
+        self.on_moved(dict(self.spots))
 
     def _detach(self):
         if self.parent is not None:

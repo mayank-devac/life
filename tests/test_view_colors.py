@@ -3,13 +3,14 @@ import contextlib
 import io
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
 
 from lifeinlife.cli import parse_args
 from lifeinlife import settings
-from lifeinlife.colors import THEMES, hue_to_rgb, parse_color, theme_to_rgb
+from lifeinlife.colors import THEMES, hue_to_rgb, parse_color, preview_stops, theme_to_rgb
 from lifeinlife.config import MAX_ZOOM, MIN_GRID
 from lifeinlife.rules import PRESETS
 from lifeinlife.view import View
@@ -22,6 +23,15 @@ class ParseColor(unittest.TestCase):
         self.assertEqual(parse_color("mauve"), (224, 176, 255))
         self.assertEqual(parse_color("#ff8800"), (255, 136, 0))
         self.assertEqual(parse_color("00ff00"), (0, 255, 0))
+
+    def test_preview_stops(self):
+        self.assertEqual(preview_stops("red"), ["#eb4034", "#eb4034"])
+        self.assertEqual(preview_stops("#FF8800"), ["#ff8800", "#ff8800"])
+        heat = preview_stops("heat")
+        self.assertEqual(len(heat), len(THEMES["heat"].stops) + 1)
+        self.assertEqual(heat[0], heat[-1])  # loops back, like the theme
+        self.assertEqual(len(preview_stops("multi")), 7)
+        self.assertEqual(preview_stops("nope"), [])
 
     def test_rejects_garbage(self):
         for bad in ("nope", "#ff88", "#gggggg"):
@@ -68,12 +78,54 @@ class SettingsFile(unittest.TestCase):
             self.assertEqual(settings.load(path), {"color": "heat", "speed": "4", "monitor": "2"})
             self.assertEqual(path.read_text(), "color=heat\nspeed=4\nmonitor=2\n")
 
+    def test_hud_spots_round_trip(self):
+        spots = {"ARZOPA": (20.0, 20.0), "LG ULTRAGEAR": (40.0, 120.5)}
+        self.assertEqual(settings.hud_text(spots), "ARZOPA@20,20;LG ULTRAGEAR@40,120.5")
+        self.assertEqual(settings.hud_spots(settings.hud_text(spots)), spots)
+        self.assertEqual(settings.hud_spots("junk;A@1,2;B@x,y;@3,4"), {"A": (1.0, 2.0)})
+        self.assertEqual(settings.hud_spots(None), {})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings"
+            settings.save(path, color="red", hud="A@1,2")
+            settings.save(path, speed="4")
+            self.assertEqual(settings.load(path), {"color": "red", "speed": "4", "hud": "A@1,2"})
+
     def test_speed_labels_round_trip(self):
         for speed in (0.5, 1, 2, 30):
             self.assertEqual(settings.parse_speed(settings.speed_label(speed)), speed)
         self.assertEqual(settings.speed_label(1), "1 generation / second")
         with self.assertRaises(ValueError):
             settings.parse_speed("-1")
+
+
+class SettingsDialog(unittest.TestCase):
+    """choose() with the windows faked: each answer is what osascript would print."""
+
+    def run_choose(self, *answers, monitors=("1: A", "2: B")):
+        replies = iter(answers)
+        with mock.patch.object(settings, "_osascript", lambda *_a, **_k: next(replies)), \
+             mock.patch.object(settings, "monitor_labels", lambda: list(monitors)):
+            return settings.choose("heat", 1, 4.0)
+
+    def test_save_on_colour_keeps_speed_and_monitor(self):
+        self.assertEqual(self.run_choose("save\nred"), ("red", 4.0, 1))
+
+    def test_save_on_speed_keeps_monitor(self):
+        self.assertEqual(self.run_choose("next\nred", "save\n2 generations / second"), ("red", 2.0, 1))
+
+    def test_next_through_every_window(self):
+        self.assertEqual(self.run_choose("next\nred", "next\n2 generations / second", "save\n2: B"),
+                         ("red", 2.0, 2))
+
+    def test_back_keeps_what_was_picked(self):
+        self.assertEqual(self.run_choose("next\nred", "back\n2 generations / second",
+                                         "next\nblue", "next\n2 generations / second", "save\n2: B"),
+                         ("blue", 2.0, 2))
+
+    def test_cancel(self):
+        self.assertIsNone(self.run_choose("next\nred", ""))
+        self.assertIsNone(self.run_choose(""))
+        self.assertIsNone(self.run_choose("next\nred", "next\n2 generations / second", ""))
 
 
 class ViewMaths(unittest.TestCase):

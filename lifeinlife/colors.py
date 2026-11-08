@@ -99,6 +99,23 @@ def parse_color(text):
         f"unknown colour {text!r}: use multi, {', '.join(THEMES)}, {', '.join(NAMED_COLORS)}, or a hex like #ff8800")
 
 
+def preview_stops(text):
+    """The colours to show in the settings picker's preview, as hex strings ("#ff8800"):
+    the rainbow for multi, a theme's stops (looped back to the first), a plain colour twice.
+    [] if `text` isn't a colour."""
+    try:
+        color = parse_color(text)
+    except argparse.ArgumentTypeError:
+        return []
+    if color is None:
+        rgbs = hue_to_rgb(np.linspace(0, 1, 7)).tolist()
+    elif isinstance(color, Theme):
+        rgbs = [*color.stops, color.stops[0]]
+    else:
+        rgbs = [color, color]
+    return ["#%02x%02x%02x" % tuple(rgb) for rgb in rgbs]
+
+
 def hue_to_rgb(hue, s=0.7, v=1.0):
     """Vectorised HSV -> RGB (uint8) for an array of hues in [0, 1)."""
     h6 = hue * 6.0

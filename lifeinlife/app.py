@@ -129,6 +129,7 @@ class LifeInLife:
         self.hud = None        # the clickable step back / play / pause / speed / pin panel
         self.hud_error = None
         self.hud_key = None    # what it last showed, and where
+        self.hud_unsaved: tuple[dict, float] | None = None  # (spots, when to save them): saved once a drag has settled
 
         # macOS: transparent background + wallpaper mode
         self.mac = None
@@ -218,13 +219,31 @@ class LifeInLife:
         if self.hud is None and self.hud_error is None:
             try:
                 from .mac.hud import Hud  # noqa: PLC0415 - macOS only
-                self.hud = Hud(self._on_hotkey)  # clicks arrive like global hotkeys
+                spots = settings.hud_spots(settings.load().get("hud"))
+                self.hud = Hud(self._on_hotkey, spots,  # clicks arrive like global hotkeys
+                               on_moved=self._hud_moved)
             except Exception as exc:  # noqa: BLE001 - nice to have, never fatal
                 self.hud_error = exc
                 print(f"Note: can't show the control panel ({exc}).")
         if self.hud is not None and self.mac is not None:
             self.hud_key = None  # fill it on the next draw
             self.hud.show(self.mac.win, self.mac.pinned)
+
+    def _hud_moved(self, spots):
+        self.hud_unsaved = (spots, time.monotonic() + 1)  # saved once the drag has settled
+
+    def _save_hud_spots(self, now=None):
+        """Save where the panel was dragged, a second after the drag (or now, on quit)."""
+        if self.hud_unsaved is None:
+            return
+        spots, when = self.hud_unsaved
+        if now is not None and now < when:
+            return
+        self.hud_unsaved = None
+        try:
+            settings.save(hud=settings.hud_text(spots))
+        except OSError as exc:
+            print(f"Note: couldn't save the panel's position ({exc.strerror}).")
 
     def _update_hud(self):
         if self.hud is None or self.mac is None:
@@ -767,6 +786,7 @@ class LifeInLife:
                     else:
                         self.toast(value, 3)
                 now = time.monotonic()
+                self._save_hud_spots(now)
                 self._poll_system(now)
                 if not self.hidden:
                     self._advance(now)
@@ -774,6 +794,7 @@ class LifeInLife:
                 if self.running:
                     self._wait(self._timeout(time.monotonic()))
         finally:
+            self._save_hud_spots()  # a drag not saved yet (quit, or launchctl restarting it)
             if self.hud is not None:
                 self.hud.close()
             if self.mac:
