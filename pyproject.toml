@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lifeinlife"
+version = "1.0.0"
+description = "Conway's Game of Life where every live cell holds another Game of Life, as a window or a live macOS wallpaper."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pygame-ce>=2.5",  # plain pygame 2.6.1 has a broken font module on Python 3.14
+    "numpy",
+    "pyobjc-framework-Cocoa; sys_platform == 'darwin'",  # transparent window and --wallpaper
+]
+
+[project.urls]
+Homepage = "https://github.com/mayank-devac/life"
+
+[project.scripts]
+life = "lifeinlife.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lifeinlife*"]

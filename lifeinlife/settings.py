@@ -7,13 +7,27 @@ It also keeps where the control panel was dragged on each monitor (hud=ARZOPA@20
 which only the app reads."""
 import argparse
 import json
+import os
 import subprocess
 from pathlib import Path
 
 from .colors import NAMED_COLORS, THEMES, parse_color, preview_stops
 from .config import SPEEDS
 
-SETTINGS_FILE = Path(__file__).resolve().parent.parent / "settings"
+
+def _settings_file():
+    """Where the settings live: $LIFE_SETTINGS if set; next to wall.sh when the package sits
+    beside it (a clone, or login.sh's copy); otherwise (installed with pip/pipx) in the same
+    folder login.sh uses, so `life` and the login wallpaper share one file."""
+    if os.environ.get("LIFE_SETTINGS"):
+        return Path(os.environ["LIFE_SETTINGS"]).expanduser()
+    beside = Path(__file__).resolve().parent.parent
+    if (beside / "wall.sh").exists():
+        return beside / "settings"
+    return Path.home() / "Library" / "Application Support" / "life-wallpaper" / "settings"
+
+
+SETTINGS_FILE = _settings_file()
 KEYS = ("color", "speed", "monitor", "hud")
 CUSTOM = "Custom hex colour…"
 TITLE = "Life wallpaper"
@@ -37,6 +51,7 @@ def save(path=SETTINGS_FILE, **changes):
     values = load(path)
     values.update({k: str(v) for k, v in changes.items() if k in KEYS and v is not None})
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text("".join(f"{k}={values[k]}\n" for k in KEYS if k in values))
     tmp.replace(path)

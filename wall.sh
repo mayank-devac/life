@@ -65,10 +65,17 @@ fi
 EXTRA=()
 [ "$EFFECTS" = 0 ] && EXTRA+=(--no-effects)
 
-PYTHON=".venv-life/bin/python"
-[ -x "$PYTHON" ] || PYTHON="python3"
+# Run the code next to this file if it's here (a clone, or login.sh's copy); otherwise the
+# installed `life` command (pipx / uv tool install), or $LIFE_BIN, which login.sh sets.
+if [ -f "life inside life.py" ]; then
+    PYTHON=".venv-life/bin/python"
+    [ -x "$PYTHON" ] || PYTHON="python3"
+    RUN=("$PYTHON" "life inside life.py")
+else
+    RUN=("${LIFE_BIN:-life}")
+fi
 
-exec "$PYTHON" "life inside life.py" --wallpaper \
+exec "${RUN[@]}" --wallpaper \
     --bg-opacity "$BG_OPACITY" \
     --opacity "$OPACITY" \
     --zoom "$ZOOM" \

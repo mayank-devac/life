@@ -9,7 +9,19 @@ And you can keep the game as your wallpaper.
 
 <div align="center"><img src="docs/life.gif" alt="life demo" width="1000"></div>
 
-## Run
+## Install
+
+One command, no clone or venv needed:
+
+```sh
+pipx install git+https://github.com/mayank-devac/life    # or: uv tool install git+https://github.com/mayank-devac/life
+life --wallpaper     # live wallpaper behind desktop icons (macOS)
+life --help          # every option
+```
+
+If `life` is installed, `./login.sh install` (from a clone) uses it instead of copying the code.
+
+## Run from a clone
 
 ```sh
 pip install -r requirements.txt

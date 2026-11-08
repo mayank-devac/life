@@ -20,7 +20,11 @@
 # run  ./login.sh install  again. Colour/speed/monitor choices made here are kept.
 # Output and errors go to ~/Library/Logs/life-wallpaper.log
 #
-# Why it copies itself: macOS blocks programs started at login from reading
+# If the `life` command is installed (pipx install / uv tool install), install uses
+# it: only wall.sh is copied, no Python environment is built. Set LIFE_FROM_SOURCE=1
+# to run this repo's code instead, or LIFE_BIN=/path/to/life to pick a specific one.
+#
+# Otherwise it copies itself: macOS blocks programs started at login from reading
 # Downloads, Desktop, Documents and iCloud Drive, which is where a cloned repo
 # usually lives. So install copies the app (and builds its own Python
 # environment) into ~/Library/Application Support/life-wallpaper, and runs it
@@ -32,8 +36,8 @@ LOG="$HOME/Library/Logs/life-wallpaper.log"
 SRC="$(cd "$(dirname "$0")" && pwd)"
 APP="$HOME/Library/Application Support/life-wallpaper"
 WALL="$APP/wall.sh"
-PY="$APP/.venv-life/bin/python"
 SETTINGS="$APP/settings"   # lines like  color=red, speed=4; wall.sh reads it and passes  --color red
+BINFILE="$APP/life-bin"    # path of the installed `life` command, when install uses one
 DOMAIN="gui/$(id -u)"
 FILES=("life inside life.py" "wall.sh" "requirements.txt")
 PACKAGE="lifeinlife"   # the code; copied whole, minus __pycache__
@@ -41,7 +45,57 @@ PACKAGE="lifeinlife"   # the code; copied whole, minus __pycache__
 # Escape text for use inside the plist's XML (& < > in a path would break it).
 xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
+# The Python that runs the installed copy: the app's own venv, or the one behind the
+# installed `life` command (pipx and uv put `python` next to `life` in the tool's venv).
+app_python() {
+    if [ -f "$BINFILE" ]; then
+        local bin real shebang
+        bin="$(cat "$BINFILE")"
+        real="$(readlink -f "$bin" 2>/dev/null || echo "$bin")"
+        if [ -x "$(dirname "$real")/python" ]; then
+            echo "$(dirname "$real")/python"
+            return
+        fi
+        shebang="$(head -n 1 "$real" 2>/dev/null)"
+        echo "${shebang#\#!}"
+    else
+        echo "$APP/.venv-life/bin/python"
+    fi
+}
+
 install() {
+    local bin="${LIFE_BIN:-$(command -v life)}"
+    if [ -n "$bin" ] && [ -z "$LIFE_FROM_SOURCE" ]; then
+        install_command "$bin"
+    else
+        install_source
+    fi
+}
+
+# Use the installed `life` command: copy only wall.sh, and tell it where `life` is.
+install_command() {
+    local bin="$1"
+    [ -x "$bin" ] || { echo "$bin is not an executable"; exit 1; }
+    [ -f "$SRC/wall.sh" ] || { echo "wall.sh not found in $SRC"; exit 1; }
+    mkdir -p "$APP" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null
+
+    echo "Using the installed life command: $bin"
+    # Drop a copied app from an earlier source install, so wall.sh runs `life` instead.
+    rm -rf "${APP:?}/$PACKAGE" "$APP/.venv-life"
+    for f in "${FILES[@]}"; do rm -f "$APP/$f"; done
+    cp "$SRC/wall.sh" "$WALL" || { echo "Couldn't copy wall.sh"; exit 1; }
+    chmod +x "$WALL"
+    echo "$bin" > "$BINFILE"
+    start
+    echo "Installed: Life wallpaper will start at every login (running now)."
+    echo "After upgrading life (pipx upgrade lifeinlife), run  $0 install  again only if its path changed."
+    echo "Log: $LOG"
+}
+
+# Copy this repo's code and build its own Python environment.
+install_source() {
+    rm -f "$BINFILE"
     for f in "${FILES[@]}"; do
         [ -f "$SRC/$f" ] || { echo "$f not found in $SRC"; exit 1; }
     done
@@ -88,6 +142,11 @@ install() {
 # Write the LaunchAgent plist and (re)start the wallpaper with it.
 start() {
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null
+    local binenv=""
+    if [ -f "$BINFILE" ]; then
+        binenv="<key>LIFE_BIN</key>
+        <string>$(xml "$(cat "$BINFILE")")</string>"
+    fi
     cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -109,6 +168,7 @@ start() {
         <!-- wall.sh trims this log when it grows past 1 MB -->
         <key>LIFE_LOG</key>
         <string>$(xml "$LOG")</string>
+        $binenv
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -146,7 +206,7 @@ restart() {
 }
 
 need_install() {
-    [ -f "$PLIST" ] && [ -x "$PY" ] && return 0
+    [ -f "$PLIST" ] && [ -x "$(app_python)" ] && return 0
     echo "Not installed yet, installing first."
     install
 }
@@ -163,7 +223,7 @@ write_setting() {
 # Prints the error and fails if it's not a colour.
 check_color() {
     local err
-    err="$(cd "$APP" && "$PY" -c 'import sys; from lifeinlife.colors import parse_color; parse_color(sys.argv[1])' "$1" 2>&1)" \
+    err="$(cd "$APP" && "$(app_python)" -c 'import sys; from lifeinlife.colors import parse_color; parse_color(sys.argv[1])' "$1" 2>&1)" \
         || { err="$(tail -n 1 <<<"$err")"; echo "${err#*Error: }"; return 1; }
 }
 
@@ -231,7 +291,11 @@ uninstall() {
 
 status() {
     if [ -f "$PLIST" ]; then echo "Installed: $PLIST"; else echo "Not installed."; fi
-    [ -d "$APP" ] && echo "App copy:  $APP"
+    if [ -f "$BINFILE" ]; then
+        echo "Runs:      $(cat "$BINFILE")"
+    elif [ -d "$APP" ]; then
+        echo "App copy:  $APP"
+    fi
     if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
         launchctl print "$DOMAIN/$LABEL" | grep -E '^[[:space:]]*(state|pid|last exit code)' \
             | sed 's/^[[:space:]]*/  /'
