@@ -10,7 +10,7 @@ BG_OPACITY=0
 
 # Opacity of the whole window (cells and the BG_OPACITY backdrop together):
 # 1 = solid, 0.1 = faint. With BG_OPACITY=0 this is effectively the cells' opacity.
-OPACITY=0.7
+OPACITY=1
 
 # Scale: bigger = larger cells (1 to 8). From 2.2 up, the inner Game of Life shows inside each cell.
 # Below 2.2 it uses almost no CPU (it wakes ~2x a second, when the world changes); above, every frame.

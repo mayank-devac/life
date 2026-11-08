@@ -44,7 +44,7 @@ def parse_rle(text):
         body.append(line)
         if "!" in line:
             break
-    if width is None:
+    if width is None or height is None:
         raise ValueError("not an RLE file (no 'x = ..., y = ...' line)")
 
     cells, row, col = [], 0, 0

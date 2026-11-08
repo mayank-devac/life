@@ -79,7 +79,7 @@ If it isn't installed yet, these install it first.
 ### The control panel
 
 A small panel in the top-left corner has buttons for **step back**, **play**, **pause**,
-**step**, **faster** (Option-click: slower; it wraps round from the fastest to the slowest) and
+**faster** (Option-click: slower; it wraps round from the fastest to the slowest), and
 **pin / unpin**. It also shows the world's **Time** (generations since it was seeded),
 **Population** (live cells), and the rule and speed.
 Unpinned, it rides along on the window's corner. Pinned, it sits in the screen's corner just
@@ -123,7 +123,7 @@ lifeinlife/
   cli.py                 command-line options
   mac/window.py          transparent + pinned window, monitor list
   mac/hotkeys.py         system-wide shortcuts (no permission prompt)
-  mac/hud.py             control panel: step back, play, pause, step, faster, pin
+  mac/hud.py             control panel: step back, play/pause, faster, pin
   mac/visibility.py      screen locked / display asleep checks
 tests/                   python -m unittest discover -s tests -t .
 ```

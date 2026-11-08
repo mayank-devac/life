@@ -45,6 +45,23 @@ NAMED_COLORS = {
 }
 
 
+def _add_shades():
+    """Add light / dark / pale versions of every named colour above (except black and
+    white, which have no useful shades): "lightblue", "darkred", "palemint", ..."""
+    def mix(rgb, target, amount):
+        r, g, b = (round(c + (target - c) * amount) for c in rgb)
+        return (r, g, b)
+    for name, rgb in list(NAMED_COLORS.items()):
+        if name in ("black", "white"):
+            continue
+        NAMED_COLORS["light" + name] = mix(rgb, 255, 0.40)
+        NAMED_COLORS["dark" + name] = mix(rgb, 0, 0.45)
+        NAMED_COLORS["pale" + name] = mix(rgb, 255, 0.70)
+
+
+_add_shades()
+
+
 class Theme(NamedTuple):
     """A looping gradient. Like "multi", every cell has its own hue (inherited from its
     parents), but the hue picks a colour along these stops instead of the rainbow."""

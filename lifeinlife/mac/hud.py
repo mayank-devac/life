@@ -1,5 +1,5 @@
-"""A small clickable panel: step back, play, pause, step, faster and pin / unpin buttons,
-plus time, population, and the rule and speed. Shown both pinned and unpinned.
+"""A small clickable panel: step back, play / pause (one toggle), faster and pin buttons,
+plus time and population. Shown both pinned and unpinned.
 
 Pinned, the wallpaper window ignores the mouse (clicks go through to the desktop), so the
 panel is its own little window in the screen's top-left corner, one level above the
@@ -21,14 +21,14 @@ INSET = 12         # gap to the game window's top-left corner (unpinned)
 BUTTON_W, BUTTON_GAP = 28, 4
 BUTTONS = [        # (action, SF Symbol, fallback title, tooltip)
     ("back", "backward.end", "◀❙", "Step back one generation"),
-    ("run", "play", "▶", "Play"),
-    ("hold", "pause", "❚❚", "Pause"),
-    ("step", "forward.end", "❙▶", "Step one generation"),
+    ("pause", "play", "▶", "Play"),  # one toggle: its face follows the state (see PLAY / PAUSE)
     ("faster", "forward", "▶▶", "Faster  (Option-click: slower)"),
     ("wallpaper", "pin", "📌", "Pin to desktop"),
 ]
+PLAY = ("play", "▶", "Play")
+PAUSE = ("pause", "❚❚", "Pause")
 UNPIN = ("pin.slash", "✕", "Unpin from desktop")
-LINES = 3          # Time, Population, rule and speed
+LINES = 2          # Time, Population
 LINE_H = 18
 W = 8 + len(BUTTONS) * (BUTTON_W + BUTTON_GAP) - BUTTON_GAP + 8
 H = 8 + LINES * LINE_H + 6 + 26 + 6
@@ -59,7 +59,7 @@ class _HudTarget(Foundation.NSObject):
 
 
 class Hud:
-    """`on_action(name)` is called with "back", "run", "hold", "step", "faster", "slower"
+    """`on_action(name)` is called with "back", "pause", "faster", "slower"
     or "wallpaper" (on the main thread, while SDL pumps events, like the global hotkeys)."""
 
     def __init__(self, on_action):
@@ -172,13 +172,12 @@ class Hud:
             return
         if self.shown is None or self.shown[4] != pinned:
             self._set_face(self.buttons["wallpaper"], *(UNPIN if pinned else BUTTONS[-1][1:]))
+        if self.shown is None or self.shown[2] != paused:
+            self._set_face(self.buttons["pause"], *(PLAY if paused else PAUSE))
         self.shown = state
         self.labels[0].setStringValue_(f"Time: {time}")
         self.labels[1].setStringValue_(f"Population: {population}")
-        self.labels[2].setStringValue_(status)
         self.buttons["back"].setEnabled_(can_back)
-        self.buttons["run"].setEnabled_(paused)        # play: only when paused
-        self.buttons["hold"].setEnabled_(not paused)   # pause: only when running
         self.panel.displayIfNeeded()  # the main thread sleeps between pumps: draw now
 
     def close(self):

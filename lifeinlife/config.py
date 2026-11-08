@@ -71,7 +71,7 @@ HELP = [
     ("Ctrl+Shift + W", "pin to desktop (wallpaper) / unpin"),
     ("Ctrl+Shift + H", "show / hide help"),
     ("Ctrl+Shift + Esc", "quit"),
-    ("Panel (top left)", "step back, play, pause, step, faster, pin / unpin"),
+    ("Panel (top left)", "step back, play, pause, faster, pin / unpin"),
 ]
 
 # While pinned the window never has focus, so shortcuts must be grabbed system-wide, which

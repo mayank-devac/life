@@ -126,7 +126,7 @@ class LifeInLife:
         self.follow_monitor = False  # wallpaper mode: keep the window on the chosen monitor
         self.monitor_missing_since = None  # when the chosen monitor went away, or None
         self.placed = None  # (target frame, frame we actually got) after the last move
-        self.hud = None        # the clickable step back / play / pause / step / speed / pin panel
+        self.hud = None        # the clickable step back / play / pause / speed / pin panel
         self.hud_error = None
         self.hud_key = None    # what it last showed, and where
 
