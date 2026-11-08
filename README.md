@@ -87,7 +87,11 @@ A small panel in the top-left corner has buttons for **step back**, **play**, **
 **pin / unpin**. It also shows the world's **Time** (generations since it was seeded),
 **Population** (live cells), and the rule and speed.
 Unpinned, it rides along on the window's corner. Pinned, it sits in the screen's corner just
-above the desktop icons, so app windows still cover it.
+above the desktop icons, so app windows still cover it. You can drag it anywhere.
+
+The last button hides the panel. Pinned it's an **eye-with-slash**, and the panel disappears;
+press `Ctrl+Shift + W` to go interactive and click the **eye** that stays in the corner to
+bring it back. Unpinned it's a **✕** that collapses the panel down to just the eye.
 
 ### Patterns and worlds
 

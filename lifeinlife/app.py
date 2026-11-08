@@ -245,8 +245,8 @@ class LifeInLife:
         """Pixels to move the help panel down so the (unpinned) control panel doesn't hide it."""
         if self.hud is None or self.pinned:
             return 0
-        from .mac.hud import H, INSET  # noqa: PLC0415 - only reached with a panel, so on macOS
-        return round((INSET + H) * self.dpr)
+        from .mac.hud import H, MARGIN  # noqa: PLC0415 - only reached with a panel, so on macOS
+        return round((MARGIN + H) * self.dpr)
 
     @property
     def max_catchup(self):

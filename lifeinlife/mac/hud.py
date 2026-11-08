@@ -17,21 +17,22 @@ NSButton, NSColor, NSScreen = AppKit.NSButton, AppKit.NSColor, AppKit.NSScreen
 NSMakeRect = AppKit.NSMakeRect
 
 MARGIN = 20        # gap to the screen's top-left corner (pinned), below the menu bar
-INSET = 12         # gap to the game window's top-left corner (unpinned)
 BUTTON_W, BUTTON_GAP = 28, 4
 BUTTONS = [        # (action, SF Symbol, fallback title, tooltip)
     ("back", "backward.end", "◀❙", "Step back one generation"),
     ("pause", "play", "▶", "Play"),  # one toggle: its face follows the state (see PLAY / PAUSE)
     ("faster", "forward", "▶▶", "Faster  (Option-click: slower)"),
     ("wallpaper", "pin", "📌", "Pin to desktop"),
+    ("toggle", "xmark", "✕", "Hide panel"),  # pinned: eye-slash hides the panel; unpinned: ✕ (see _layout)
 ]
 PLAY = ("play", "▶", "Play")
 PAUSE = ("pause", "❚❚", "Pause")
-UNPIN = ("pin.slash", "✕", "Unpin from desktop")
+UNPIN = ("pin.slash", "⊘", "Unpin from desktop")
 LINES = 2          # Time, Population
 LINE_H = 18
 W = 8 + len(BUTTONS) * (BUTTON_W + BUTTON_GAP) - BUTTON_GAP + 8
 H = 8 + LINES * LINE_H + 6 + 26 + 6
+SMALL_W, SMALL_H = 44, 40   # unpinned with the panel hidden: just the eye button
 
 
 def _icon_level():
@@ -53,9 +54,17 @@ class _HudButton(NSButton):
 class _HudTarget(Foundation.NSObject):
     def clicked_(self, sender):
         action = BUTTONS[sender.tag()][0]
+        if action == "toggle":
+            self.hud.toggle()
+            return
         if action == "faster" and AppKit.NSEvent.modifierFlags() & AppKit.NSEventModifierFlagOption:
             action = "slower"
         self.on_action(action)
+
+
+class _HudMoved(Foundation.NSObject):
+    def moved_(self, _note):
+        self.hud._moved()
 
 
 class Hud:
@@ -78,6 +87,18 @@ class Hud:
         p.setBackgroundColor_(NSColor.clearColor())
         p.setHasShadow_(False)
         p.setReleasedWhenClosed_(False)
+        p.setMovableByWindowBackground_(True)  # drag the panel by its background / labels
+
+        self.offset = None     # where the user dragged it while pinned: (dx, dy) from the screen's top-left
+        self.placing = False   # True while we move it ourselves, so that isn't taken for a drag
+        self.pinned = False
+        self.hidden = False    # the user hid the panel: pinned, it vanishes; unpinned, only the eye stays
+        self.w, self.h = W, H
+        self.area = None       # the screen area the pinned panel was last placed in
+        self.watcher = _HudMoved.alloc().init()
+        self.watcher.hud = self
+        Foundation.NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
+            self.watcher, "moved:", AppKit.NSWindowDidMoveNotification, p)
 
         frame = AppKit.NSBox.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
         frame.setBoxType_(4)        # NSBoxCustom: our own fill, border and corners
@@ -88,10 +109,12 @@ class Hud:
         frame.setBorderWidth_(1.0)
         frame.setCornerRadius_(6.0)
         p.setContentView_(frame)
+        self.frame = frame
         box = frame.contentView()
 
         self.target = _HudTarget.alloc().init()
         self.target.on_action = on_action
+        self.target.hud = self
         white = NSColor.whiteColor()
         self.buttons = {}
         for i, (action, symbol, title, tip) in enumerate(BUTTONS):
@@ -136,31 +159,97 @@ class Hud:
         """Pinned: the top-left corner of `win`'s screen, below the menu bar, above the
         desktop icons. Unpinned: the top-left corner of `win` (the game window), riding
         along with it as a child window."""
+        # The same spot pinned or not: the screen's top-left corner, below the menu bar
+        # (or wherever the user dragged it).
+        screen = win.screen() or NSScreen.mainScreen()
+        if screen is None:
+            return
+        area = screen.visibleFrame()
+        if self.area is not None and (self.area.origin.x, self.area.origin.y) != (
+                area.origin.x, area.origin.y):
+            self.offset = None  # another monitor: back to the corner
+        self.area = area
         if pinned:
             self._detach()
             self.panel.setLevel_(_icon_level())
-            screen = win.screen() or NSScreen.mainScreen()
-            if screen is None:
-                return
-            area, margin = screen.visibleFrame(), MARGIN
         else:
-            area, margin = win.frame(), INSET
             self.panel.setLevel_(win.level())
             if self.parent is not win:
                 self._detach()
                 win.addChildWindow_ordered_(self.panel, AppKit.NSWindowAbove)
                 self.parent = win
-        self.panel.setFrameOrigin_((area.origin.x + margin,
-                                    area.origin.y + area.size.height - margin - H))
+        self.pinned = pinned
+        self._layout()
+        self._position()
+
+    def _position(self):
+        if self.area is None:
+            return
+        dx, dy = self.offset if self.offset is not None else (MARGIN, MARGIN)
+        origin = (self.area.origin.x + dx, self.area.origin.y + self.area.size.height - dy - self.h)
+        self.placing = True
+        try:
+            self.panel.setFrameOrigin_(origin)
+        finally:
+            self.placing = False
+
+    def _moved(self):
+        """The user dragged the pinned panel: remember where, relative to the screen's top-left."""
+        if self.placing or self.area is None:
+            return
+        o = self.panel.frame().origin
+        self.offset = (o.x - self.area.origin.x,
+                       self.area.origin.y + self.area.size.height - o.y - self.h)
 
     def _detach(self):
         if self.parent is not None:
             self.parent.removeChildWindow_(self.panel)
             self.parent = None
 
+    def toggle(self):
+        """The ✕ (pinned) or eye (unpinned) button: hide the panel, or bring it back."""
+        self.hidden = not self.hidden
+        self._layout()
+        self._position()
+        self._order()
+        self.panel.displayIfNeeded()
+
+    def _order(self):
+        if self.pinned and self.hidden:
+            self.panel.orderOut_(None)
+        else:
+            self.panel.orderFrontRegardless()
+
+    def _layout(self):
+        """Full panel, or just the eye button (unpinned and hidden); sets the toggle's face."""
+        small = self.hidden and not self.pinned
+        self.w, self.h = (SMALL_W, SMALL_H) if small else (W, H)
+        self.placing = True  # resizing moves the window's origin: not a drag
+        try:
+            self.panel.setContentSize_((self.w, self.h))
+        finally:
+            self.placing = False
+        self.frame.setFrame_(NSMakeRect(0, 0, self.w, self.h))
+        for action, b in self.buttons.items():
+            if action != "toggle":
+                b.setHidden_(small)
+        for label in self.labels:
+            label.setHidden_(small)
+        t = self.buttons["toggle"]
+        i = len(BUTTONS) - 1
+        if small:
+            t.setFrame_(NSMakeRect((SMALL_W - BUTTON_W) / 2, (SMALL_H - 26) / 2, BUTTON_W, 26))
+            self._set_face(t, "eye", "👁", "Show panel")
+        else:
+            t.setFrame_(NSMakeRect(8 + i * (BUTTON_W + BUTTON_GAP), H - 32, BUTTON_W, 26))
+            if self.pinned:
+                self._set_face(t, "eye.slash", "👁", "Hide panel")
+            else:
+                self._set_face(t, "xmark", "✕", "Hide panel")
+
     def show(self, win, pinned):
         self.place(win, pinned)
-        self.panel.orderFrontRegardless()
+        self._order()
 
     def hide(self):
         self._detach()
@@ -171,7 +260,7 @@ class Hud:
         if state == self.shown:
             return
         if self.shown is None or self.shown[4] != pinned:
-            self._set_face(self.buttons["wallpaper"], *(UNPIN if pinned else BUTTONS[-1][1:]))
+            self._set_face(self.buttons["wallpaper"], *(UNPIN if pinned else BUTTONS[3][1:]))
         if self.shown is None or self.shown[2] != paused:
             self._set_face(self.buttons["pause"], *(PLAY if paused else PAUSE))
         self.shown = state
@@ -181,6 +270,7 @@ class Hud:
         self.panel.displayIfNeeded()  # the main thread sleeps between pumps: draw now
 
     def close(self):
+        Foundation.NSNotificationCenter.defaultCenter().removeObserver_(self.watcher)
         self._detach()
         self.panel.orderOut_(None)
         self.panel.close()
