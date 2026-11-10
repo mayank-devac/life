@@ -50,7 +50,8 @@ Its output goes to `~/Library/Logs/life-detached.log`.
 in `~/Applications`, so after closing it (Ctrl+Shift+Esc) you can start it again from Spotlight
 (Cmd+Space, "Life in Life"), Launchpad or Finder, or drag it to the Dock. If you used
 `life --login install`, the app restarts that one, with its settings; otherwise it runs like
-`life -d` with your saved colour, mode and monitor. Opening it while it's already running does nothing.
+`life -d` with your saved colour, mode and monitor. Opening it while it's already running shows
+its settings window (the same as `Ctrl+Shift + S`).
 
 Update with `pipx upgrade lifeinlife` (or `uv tool upgrade lifeinlife`).
 
@@ -83,9 +84,10 @@ After editing `wall.sh`, run `./login.sh install` again to apply it. Logs: `~/Li
 
 ### Change colour, mode, size or monitor (no need to edit `wall.sh`)
 
-Press **`Ctrl+Shift + S`** while it's running (pinned or not, wallpaper or window): a small
-window asks for a colour, a speed, **wallpaper or window**, the window's size (for a window),
-then a monitor, and it changes on the spot. Switching to *Window* turns the wallpaper into a
+Press **`Ctrl+Shift + S`** while it's running (pinned or not, wallpaper or window), or open the
+**Life in Life** app (see `life --make-app`): a small window asks for a colour, a speed,
+**wallpaper or window and on which monitor** (one list, e.g. *Wallpaper on 2: LG ULTRAGEAR*),
+then the window's size (for a window), and it changes on the spot. Switching to *Window* turns the wallpaper into a
 normal movable window; switching to *Wallpaper* makes a window fill its monitor behind your
 icons. The mode and size are remembered too: a plain `life` starts in the mode you last
 picked (`life --window` / `life --wallpaper` override it). From the terminal:

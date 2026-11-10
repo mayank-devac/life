@@ -3,8 +3,17 @@ desktop icons, and the list of monitors."""
 import ctypes
 import ctypes.util
 import importlib
+import warnings
 
 from ..config import MAC_KEYCODES
+
+# keep_transparent() reads a layer's CGColor every frame. Without pyobjc's Quartz bindings
+# (not a dependency) that comes back as a raw pointer, with a warning each time; only
+# whether it's None matters here.
+try:
+    warnings.filterwarnings("ignore", category=importlib.import_module("objc").ObjCPointerWarning)
+except (ImportError, AttributeError):
+    pass
 from .hotkeys import CarbonHotkeys
 
 
@@ -68,10 +77,13 @@ class MacWindow:
     def keep_transparent(self, force=False):
         """macOS creates the content view's backing layer lazily, after the first frame,
         and gives it an opaque black background, which hides the wallpaper behind it.
-        Called every frame; it only does work when that layer has been (re)created.
+        It can also put that black background back on the same layer later, e.g. when
+        the window is resized (switching from wallpaper to window mode does that).
+        Called every frame; it only does work when the layer is new or black again.
         Returns True when it did, so the caller knows to redraw."""
         root = self.win.contentView().layer()
-        if not force and (root is None or root is self._fixed_layer):
+        if not force and (root is None or (root is self._fixed_layer and not root.isOpaque()
+                                           and root.backgroundColor() is None)):
             return False
         self._fixed_layer = root
 

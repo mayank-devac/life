@@ -100,14 +100,20 @@ class SettingsFile(unittest.TestCase):
 
 class SettingsDialog(unittest.TestCase):
     """choose() with the windows faked: each answer is what osascript would print."""
-    WALL = "next\n" + settings.MODE_LABELS[settings.WALLPAPER]
+    WALL = "next\n" + settings.MODE_LABELS[settings.WALLPAPER]   # one monitor
     WIN = "next\n" + settings.MODE_LABELS[settings.WINDOW]
+    SPEED2 = "next\n2 generations / second"
 
     def run_choose(self, *answers, monitors=("1: A", "2: B"), mode=settings.WALLPAPER):
-        replies = iter(answers)
-        with mock.patch.object(settings, "_osascript", lambda *_a, **_k: next(replies)), \
+        replies, prompts = iter(answers), []
+
+        def fake(_script, *args, **_k):
+            prompts.append(args)
+            return next(replies)
+        with mock.patch.object(settings, "_osascript", fake), \
              mock.patch.object(settings, "monitor_labels", lambda: list(monitors)):
             picked = settings.choose("heat", 1, 4.0, mode, 800)
+        self.prompts = prompts
         if picked is None:
             return None
         return tuple(picked[k] for k in ("color", "speed", "monitor", "mode", "size"))
@@ -119,37 +125,46 @@ class SettingsDialog(unittest.TestCase):
         self.assertEqual(self.run_choose("next\nred", "save\n2 generations / second"),
                          ("red", 2.0, 1, "wallpaper", 800))
 
-    def test_next_through_every_window(self):
-        self.assertEqual(self.run_choose("next\nred", "next\n2 generations / second", self.WALL,
-                                         "save\n2: B"),
+    def test_mode_and_monitor_are_one_window(self):
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "save\nWallpaper on 2: B"),
+                         ("red", 2.0, 2, "wallpaper", 800))
+        # Every mode on every monitor, the current one selected.
+        options = self.prompts[2][4:]
+        self.assertEqual(options, ("Wallpaper on 1: A", "Wallpaper on 2: B",
+                                   "Window on 1: A", "Window on 2: B"))
+        self.assertEqual(self.prompts[2][1], "Wallpaper on 1: A")
+
+    def test_wallpaper_ends_after_where(self):
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\nWallpaper on 2: B"),
                          ("red", 2.0, 2, "wallpaper", 800))
 
     def test_window_mode_asks_for_a_size(self):
-        self.assertEqual(self.run_choose("next\nred", "next\n2 generations / second", self.WIN,
-                                         "next\n" + settings.size_label(600), "save\n2: B"),
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\nWindow on 2: B",
+                                         "save\n" + settings.size_label(600)),
                          ("red", 2.0, 2, "window", 600))
 
-    def test_wallpaper_mode_skips_the_size_both_ways(self):
-        # Back from the monitor window goes straight to the mode window for a wallpaper.
-        self.assertEqual(self.run_choose("next\nred", "next\n2 generations / second", self.WALL,
-                                         "back\n2: B", self.WALL, "save\n2: B"),
-                         ("red", 2.0, 2, "wallpaper", 800))
+    def test_back_from_size_keeps_the_place(self):
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\nWindow on 2: B",
+                                         "back\n" + settings.size_label(600), "save\nWindow on 2: B"),
+                         ("red", 2.0, 2, "window", 600))
+        self.assertEqual(self.prompts[4][1], "Window on 2: B")  # shown selected on the way back
 
-    def test_one_monitor_ends_after_the_last_question(self):
-        self.assertEqual(self.run_choose("next\nred", "next\n2 generations / second", self.WIN,
+    def test_one_monitor_asks_only_the_mode(self):
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, self.WIN,
                                          "next\n" + settings.size_label(1000), monitors=("1: A",)),
                          ("red", 2.0, 1, "window", 1000))
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, self.WALL, monitors=()),
+                         ("red", 2.0, 1, "wallpaper", 800))
 
     def test_back_keeps_what_was_picked(self):
         self.assertEqual(self.run_choose("next\nred", "back\n2 generations / second",
-                                         "next\nblue", "next\n2 generations / second", self.WALL,
-                                         "save\n2: B"),
+                                         "next\nblue", self.SPEED2, "save\nWallpaper on 2: B"),
                          ("blue", 2.0, 2, "wallpaper", 800))
 
     def test_cancel(self):
         self.assertIsNone(self.run_choose("next\nred", ""))
         self.assertIsNone(self.run_choose(""))
-        self.assertIsNone(self.run_choose("next\nred", "next\n2 generations / second", ""))
+        self.assertIsNone(self.run_choose("next\nred", self.SPEED2, ""))
 
     def test_parse_size(self):
         self.assertEqual(settings.parse_size("600"), 600)

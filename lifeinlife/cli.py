@@ -104,6 +104,7 @@ def parse_args(argv=None):
     p.add_argument("--make-app", action="store_true",
                    help=f"macOS: put a '{APP_NAME}' app in ~/Applications, so you can open it again "
                         "from Spotlight, Launchpad, Finder or the Dock without a terminal, then exit")
+    p.add_argument("--from-app", action="store_true", help=argparse.SUPPRESS)  # the app's script
     p.add_argument("--settings", action="store_true",
                    help="open the colour / speed / mode / size / monitor picker, save the choice for wall.sh, "
                         "then exit (Ctrl+Shift+S does the same while it runs)")
@@ -151,25 +152,13 @@ def list_monitors():
 
 PID_FILE = Path(tempfile.gettempdir()) / "lifeinlife-detached.pid"
 DETACHED_ENV = "LIFE_DETACHED"  # set in the background copy, so it doesn't detach again
-FROM_APP_ENV = "LIFE_FROM_APP"  # set by the app that --make-app writes
 DETACH_LOG = (Path.home() / "Library" / "Logs" / "life-detached.log" if sys.platform == "darwin"
               else Path(tempfile.gettempdir()) / "life-detached.log")
 
 
 def _detached_pid():
     """The pid of a copy started with --detach that is still running, else None."""
-    try:
-        pid = int(PID_FILE.read_text().strip())
-        os.kill(pid, 0)  # raises if it's gone
-    except (OSError, ValueError):
-        return None
-    if sys.platform != "win32":
-        # The pid may have been reused by something else since: only trust it if it's us.
-        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
-                             capture_output=True, text=True).stdout
-        if "life" not in out:
-            return None
-    return pid
+    return settings.live_pid(PID_FILE)
 
 
 def stop_detached():
@@ -227,17 +216,9 @@ def detach(argv, hide_terminal):
 
 APP_SCRIPT = """#!/bin/bash
 # Opens {name}. Written by  life --make-app  (run it again to rewrite this).
-# Installed to start at login (life --login install)? Then start that one, with its settings.
-LABEL="com.$(id -un).life-wallpaper"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-if [ -f "$PLIST" ]; then
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null   # loaded already: no-op
-    exec launchctl kickstart "gui/$(id -u)/$LABEL"             # running already: no-op
-fi
-# Otherwise run life in the background, like  life -d  (with the saved colour, mode, ...).
+# Running already: shows its settings. Otherwise starts it (see open_from_app in cli.py).
 export PYTHONPATH={pythonpath}${{PYTHONPATH:+:$PYTHONPATH}}
-export {from_app}=1
-exec {python} -c 'from lifeinlife.cli import main; main()' --detach "$@"
+exec {python} -c 'from lifeinlife.cli import main; main()' --from-app
 """
 
 APP_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
@@ -268,7 +249,7 @@ def make_app():
     exe = macos / "life"
     package_root = str(Path(__file__).resolve().parent.parent)  # so a clone imports too
     exe.write_text(APP_SCRIPT.format(name=APP_NAME, python=shlex.quote(sys.executable),
-                                     pythonpath=shlex.quote(package_root), from_app=FROM_APP_ENV))
+                                     pythonpath=shlex.quote(package_root)))
     exe.chmod(0o755)
     # Tell Launch Services / Spotlight about it now, instead of whenever they next look.
     lsregister = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
@@ -280,6 +261,26 @@ def make_app():
     print("drag it to the Dock to keep it one click away.")
     if "/Downloads/" in package_root or "/Desktop/" in package_root or "/Documents/" in package_root:
         print(f"Note: it runs the code in {package_root}; don't move or delete that folder.")
+
+
+def open_from_app():
+    """What opening the Life in Life app does. Already running (however it was started): show
+    its settings window, like Ctrl+Shift+S. Otherwise start the login wallpaper if that's
+    installed (with wall.sh's settings), else a background copy like  life -d."""
+    pid = settings.live_pid(settings.RUNNING_FILE)
+    if pid is not None:
+        os.kill(pid, signal.SIGUSR1)  # app.py opens the settings on it
+        return
+    import pwd  # noqa: PLC0415 - Unix only, like the rest of this
+    label = f"com.{pwd.getpwuid(os.getuid()).pw_name}.life-wallpaper"  # login.sh's LABEL
+    plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    if plist.is_file():
+        domain = f"gui/{os.getuid()}"
+        subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True)
+        subprocess.run(["launchctl", "kickstart", f"{domain}/{label}"])
+        return
+    # No terminal to hide: the app in front now is Finder, the Dock or similar.
+    detach([], hide_terminal=False)
 
 
 def run_login(commands):
@@ -333,12 +334,11 @@ def main(argv=None):
     if args.make_app:
         make_app()
         return
-    from_app = bool(os.environ.pop(FROM_APP_ENV, None))
+    if args.from_app:
+        open_from_app()
+        return
     if args.detach and not os.environ.get(DETACHED_ENV):
-        if from_app and _detached_pid() is not None:
-            return  # opening the app while it already runs leaves that one alone
-        # From the app there is no terminal to hide (the app in front is Finder or similar).
-        detach(argv, hide_terminal=args.wallpaper and not from_app)
+        detach(argv, hide_terminal=args.wallpaper)
         return
     print("Life in Life  -  shortcuts:")
     for keys, what in HELP:

@@ -29,6 +29,25 @@ def _settings_file():
 
 
 SETTINGS_FILE = _settings_file()
+# The pid of the copy that's running (any way it was started), so opening the Life in Life app
+# again can ask it to show this dialog (SIGUSR1) instead of starting a second one.
+RUNNING_FILE = Path.home() / "Library" / "Caches" / "lifeinlife-running.pid"
+
+
+def live_pid(path):
+    """The pid in `path` if that process is still running and is Life in Life, else None."""
+    try:
+        pid = int(Path(path).read_text().strip())
+        os.kill(pid, 0)  # raises if it's gone
+    except (OSError, ValueError):
+        return None
+    if os.name != "nt":
+        # The pid may have been reused by something else since: only trust it if it's us.
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                             capture_output=True, text=True).stdout
+        if "life" not in out:
+            return None
+    return pid
 KEYS = ("color", "speed", "monitor", "mode", "size", "hud")
 WALLPAPER, WINDOW = "wallpaper", "window"   # the two modes (saved as mode=...)
 MODE_LABELS = {WALLPAPER: "Wallpaper  (fills the monitor, behind your icons)",
@@ -128,7 +147,7 @@ function run(argv) {
     var preview = null;
     function showPreview(row) {
         if (!preview) return;
-        var img = row >= 0 ? gradientImage(opts[row], 280, 28, 7) : null;
+        var img = row >= 0 ? gradientImage(opts[row], W - 40, 28, 7) : null;
         preview.image = img || $();
         preview.hidden = !img;
     }
@@ -149,7 +168,7 @@ function run(argv) {
         }
     });
     var me = $.LifePicker.alloc.init;
-    var W = 320, H = hasSwatches ? 396 : 360, top = hasSwatches ? 36 : 0;
+    var W = 380, H = hasSwatches ? 396 : 360, top = hasSwatches ? 36 : 0;
     var win = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, W, H), 3, 2, false);  // titled + close button
     win.delegate = me;
     win.title = '%s';
@@ -159,7 +178,7 @@ function run(argv) {
     view.addSubview(label);
     if (hasSwatches) {
         preview = $.NSImageView.alloc.initWithFrame($.NSMakeRect(20, H - 72, W - 40, 28));
-        preview.imageScaling = 1;  // fill the frame: the grid lines stay crisp at 280x28
+        preview.imageScaling = 1;  // fill the frame: drawn at this size, so the grid lines stay crisp
         view.addSubview(preview);
     }
     var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, 60, W - 40, H - 104 - top));
@@ -299,39 +318,43 @@ def parse_size(text):
     return value
 
 
-STEPS = ("color", "speed", "mode", "size", "monitor")
+STEPS = ("color", "speed", "place", "size")
+
+
+def place_options(monitors, monitor):
+    """The one window that asks wallpaper or window, and on which monitor: [(label, mode,
+    monitor number)], every mode on every monitor. With one monitor (or none found) just the
+    two modes, on `monitor`."""
+    if len(monitors) < 2:
+        return [(label, mode, monitor) for mode, label in MODE_LABELS.items()]
+    return [(f"{'Wallpaper' if mode == WALLPAPER else 'Window'} on {screen}", mode,
+             int(screen.split(":", 1)[0]))
+            for mode in MODE_LABELS for screen in monitors]
 
 
 def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None):
-    """Ask for a colour, a speed, wallpaper or window, the window's size (only for a
-    window), then a monitor (skipped with only one screen).
+    """Ask for a colour, a speed, wallpaper or window and on which monitor (one window), then
+    the window's size (only for a window).
     Each window has Next (go on to the next one), Save (stop here, keeping the current
     values of the later windows) and Back (what you picked in it is kept); closing it cancels.
     `color` is the current colour's text ("multi", "heat", "red", "#ff8800"), `speed` the
     outer generations per second, `monitor` its number, `mode` WALLPAPER or WINDOW, `size`
     the window's size in points. `progress(text)`, if given, is told about the pause before
-    the monitor window.
+    the wallpaper / window window (finding the monitors).
     Returns {"color", "speed", "monitor", "mode", "size"}, or None if cancelled."""
     progress = progress or (lambda _text: None)
     names = ["multi", *THEMES, *NAMED_COLORS]
     speed_labels = [speed_label(v) for v in sorted({*SPEEDS, float(speed)})]
     size_labels = [size_label(v) for v in sorted({*WINDOW_SIZES, int(size)})]
     mode = mode if mode in MODE_LABELS else WINDOW
-    now = {"color": color, "speed": speed_label(speed), "mode": mode, "size": size_label(size)}
+    now = {"color": color, "speed": speed_label(speed), "mode": mode, "size": size_label(size),
+           "monitor": monitor}
     picked = {"color": color, "speed": float(speed), "monitor": monitor, "mode": mode,
               "size": int(size)}
-    monitors = None  # loaded on the way to that window
+    places = None  # loaded on the way to that window (finding the monitors takes a moment)
 
     def wanted(step):
-        nonlocal monitors
-        if step == "size":
-            return picked["mode"] == WINDOW
-        if step == "monitor":
-            if monitors is None:
-                progress("Loading monitors…")
-                monitors = monitor_labels()
-            return len(monitors) > 1  # only one screen: nothing to ask
-        return True
+        return step != "size" or picked["mode"] == WINDOW
 
     i = 0
     while True:
@@ -360,25 +383,25 @@ def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None):
                                   speed_labels)
             if value:
                 picked["speed"] = parse_speed(value)
-        elif step == "mode":
-            labels = list(MODE_LABELS.values())
-            button, value = _pick(f"Show it as (now: {now['mode']}):", MODE_LABELS[picked["mode"]],
-                                  labels)
+        elif step == "place":
+            if places is None:
+                progress("Loading monitors…")
+                monitors = monitor_labels()
+                places = place_options(monitors, picked["monitor"])
+                several = len(monitors) > 1
+            current = next((label for label, m, n in places
+                            if m == picked["mode"] and n == picked["monitor"]),
+                           next(label for label, m, _n in places if m == picked["mode"]))
+            where = f"{now['mode']} on monitor {now['monitor']}" if several else now["mode"]
+            button, value = _pick(f"Show it as{', and where' if several else ''} (now: {where}):",
+                                  current, [label for label, _m, _n in places])
             if value:
-                picked["mode"] = next(m for m, label in MODE_LABELS.items() if label == value)
-        elif step == "size":
+                _label, picked["mode"], picked["monitor"] = next(p for p in places if p[0] == value)
+        else:
             button, value = _pick(f"Window size (now: {now['size']}):", size_label(picked["size"]),
-                                  size_labels)
+                                  size_labels, last=True)
             if value:
                 picked["size"] = parse_size(value)
-        else:
-            screens = monitors or []  # loaded by wanted("monitor"): 2+ entries to get here
-            current = next((l for l in screens if l.startswith(f"{picked['monitor']}:")), screens[0])
-            question = ("Which monitor should it cover?" if picked["mode"] == WALLPAPER
-                        else "Which monitor should the window open on?")
-            button, value = _pick(question, current, screens, last=True)
-            if value:
-                picked["monitor"] = int(value.split(":", 1)[0])
 
         if button is None:
             return None

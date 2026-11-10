@@ -12,6 +12,7 @@ The main loop is event-driven, not a fixed 30 fps spin:
 Time is kept with a frame clock (`next_tick`), so the speed is the same either way.
 """
 import math
+import os
 import queue
 import signal
 import sys
@@ -950,6 +951,19 @@ class LifeInLife:
             self.running = False
         signal.signal(signal.SIGINT, stop)
         signal.signal(signal.SIGTERM, stop)
+        # SIGUSR1: the Life in Life app was opened while this runs; show the settings
+        # (it answers at the next wake-up, within a second).
+        if hasattr(signal, "SIGUSR1"):
+            def show_settings(*_):
+                self.pending.append("settings")
+                self.woken.set()
+            signal.signal(signal.SIGUSR1, show_settings)
+        running = settings.RUNNING_FILE
+        try:
+            running.parent.mkdir(parents=True, exist_ok=True)
+            running.write_text(str(os.getpid()))
+        except OSError:
+            running = None  # the app just starts a second copy then
         try:
             while self.running:
                 for event in pygame.event.get():
@@ -976,6 +990,8 @@ class LifeInLife:
                 if self.running:
                     self._wait(self._timeout(time.monotonic()))
         finally:
+            if running is not None and settings.live_pid(running) == os.getpid():
+                running.unlink(missing_ok=True)  # unless a newer copy has taken it over
             self._save_hud_spots()  # a drag not saved yet (quit, or launchctl restarting it)
             if self.hud is not None:
                 self.hud.close()
