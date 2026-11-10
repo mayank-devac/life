@@ -53,6 +53,11 @@ in `~/Applications`, so after closing it (Ctrl+Shift+Esc) you can start it again
 `life -d` with your saved colour, mode and monitor. Opening it while it's already running shows
 its settings window (the same as `Ctrl+Shift + S`).
 
+Opening the app also puts a **menu bar icon** (a little grid) at the top of the screen, with
+**Start**, **Stop**, **Settings…** and **Quit** (stops Life and removes the icon). It stays
+there while Life is stopped, so you can start it again from it. Without the app: `life --menubar`.
+To have both at every login, add *Life in Life* in System Settings → General → Login Items.
+
 Update with `pipx upgrade lifeinlife` (or `uv tool upgrade lifeinlife`).
 
 `life --login …` takes the same commands as `./login.sh` below. From a clone, `./login.sh install`
@@ -86,8 +91,8 @@ After editing `wall.sh`, run `./login.sh install` again to apply it. Logs: `~/Li
 
 Press **`Ctrl+Shift + S`** while it's running (pinned or not, wallpaper or window), or open the
 **Life in Life** app (see `life --make-app`): a small window asks for a colour, a speed,
-**wallpaper or window and on which monitor** (one list, e.g. *Wallpaper on 2: LG ULTRAGEAR*),
-then the window's size (for a window), and it changes on the spot. Switching to *Window* turns the wallpaper into a
+**wallpaper or window and on which monitor** (one list, with a *Wallpaper* and a *Window* section),
+then the window's size (for a window; *Custom size…* lets you type any size), and it changes on the spot. Switching to *Window* turns the wallpaper into a
 normal movable window; switching to *Wallpaper* makes a window fill its monitor behind your
 icons. The mode and size are remembered too: a plain `life` starts in the mode you last
 picked (`life --window` / `life --wallpaper` override it). From the terminal:
@@ -189,6 +194,7 @@ lifeinlife/
   mac/hotkeys.py         system-wide shortcuts (no permission prompt)
   mac/hud.py             control panel: step back, play/pause, faster, pin
   mac/visibility.py      screen locked / display asleep checks
+  mac/menubar.py         menu bar icon: start, stop, settings, quit
 tests/                   python -m unittest discover -s tests -t .
 ```
 

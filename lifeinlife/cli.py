@@ -105,6 +105,9 @@ def parse_args(argv=None):
                    help=f"macOS: put a '{APP_NAME}' app in ~/Applications, so you can open it again "
                         "from Spotlight, Launchpad, Finder or the Dock without a terminal, then exit")
     p.add_argument("--from-app", action="store_true", help=argparse.SUPPRESS)  # the app's script
+    p.add_argument("--menubar", action="store_true",
+                   help="macOS: show a menu bar icon to start, stop and quit Life in Life, and open "
+                        "its settings (the Life in Life app from --make-app starts it for you)")
     p.add_argument("--settings", action="store_true",
                    help="open the colour / speed / mode / size / monitor picker, save the choice for wall.sh, "
                         "then exit (Ctrl+Shift+S does the same while it runs)")
@@ -185,27 +188,30 @@ def _frontmost_app():
     return workspace.sharedWorkspace().frontmostApplication()
 
 
+def _background(args):
+    """Run `life <args>` as a background process, free of this terminal; its output goes to
+    DETACH_LOG. Returns the Popen."""
+    package_root = str(Path(__file__).resolve().parent.parent)  # so a clone imports too
+    env = dict(os.environ, **{DETACHED_ENV: "1"})
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
+    DETACH_LOG.parent.mkdir(parents=True, exist_ok=True)
+    command = [sys.executable, "-c", "from lifeinlife.cli import main; main()", *args]
+    with open(DETACH_LOG, "ab") as log:
+        if sys.platform == "win32":
+            return subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                env=env, start_new_session=True)
+
+
 def detach(argv, hide_terminal):
     """Start this same command again in the background, free of the terminal, and return.
     Closing the terminal afterwards doesn't stop it (it's in its own session, so no SIGHUP)."""
     if _detached_pid() is not None:
         stop_detached()  # one at a time: the new one replaces it
     terminal = _frontmost_app() if hide_terminal else None
-    package_root = str(Path(__file__).resolve().parent.parent)  # so a clone imports too
-    env = dict(os.environ, **{DETACHED_ENV: "1"})
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
-    rest = [a for a in argv if a not in ("-d", "--detach")]
-    DETACH_LOG.parent.mkdir(parents=True, exist_ok=True)
-    command = [sys.executable, "-c", "from lifeinlife.cli import main; main()", *rest]
-    with open(DETACH_LOG, "ab") as log:
-        if sys.platform == "win32":
-            child = subprocess.Popen(
-                command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
-        else:
-            child = subprocess.Popen(
-                command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
-                start_new_session=True)
+    child = _background([a for a in argv if a not in ("-d", "--detach")])
     PID_FILE.write_text(str(child.pid))
     print(f"Life in Life is running in the background (pid {child.pid}).")
     print("You can close this terminal. Stop it with Ctrl+Shift+Esc, or:  life --stop")
@@ -263,14 +269,17 @@ def make_app():
         print(f"Note: it runs the code in {package_root}; don't move or delete that folder.")
 
 
-def open_from_app():
-    """What opening the Life in Life app does. Already running (however it was started): show
-    its settings window, like Ctrl+Shift+S. Otherwise start the login wallpaper if that's
-    installed (with wall.sh's settings), else a background copy like  life -d."""
-    pid = settings.live_pid(settings.RUNNING_FILE)
-    if pid is not None:
-        os.kill(pid, signal.SIGUSR1)  # app.py opens the settings on it
-        return
+MENUBAR_FILE = Path.home() / "Library" / "Caches" / "lifeinlife-menubar.pid"
+
+
+def running_pid():
+    """The pid of the Life in Life that's running (however it was started), or None."""
+    return settings.live_pid(settings.RUNNING_FILE) or _detached_pid()
+
+
+def start_life():
+    """Start it the way it's set up: the login wallpaper if that's installed (with wall.sh's
+    settings), else a background copy like  life -d  (with the saved colour, mode, ...)."""
     import pwd  # noqa: PLC0415 - Unix only, like the rest of this
     label = f"com.{pwd.getpwuid(os.getuid()).pw_name}.life-wallpaper"  # login.sh's LABEL
     plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
@@ -281,6 +290,49 @@ def open_from_app():
         return
     # No terminal to hide: the app in front now is Finder, the Dock or similar.
     detach([], hide_terminal=False)
+
+
+def stop_life():
+    """Stop the running copy. It quits cleanly on SIGTERM, and launchd doesn't restart the
+    login wallpaper after a clean quit."""
+    pid = running_pid()
+    if pid is not None:
+        os.kill(pid, signal.SIGTERM)
+
+
+def show_settings():
+    """Ask the running copy to open its settings window (app.py handles SIGUSR1)."""
+    pid = settings.live_pid(settings.RUNNING_FILE)  # only copies new enough to handle it
+    if pid is not None:
+        os.kill(pid, signal.SIGUSR1)
+
+
+def open_from_app():
+    """What opening the Life in Life app does. Already running: show its settings window,
+    like Ctrl+Shift+S. Otherwise start it. Either way, make sure the menu bar icon is there."""
+    if settings.live_pid(settings.RUNNING_FILE) is not None:
+        show_settings()
+    else:
+        start_life()
+    if settings.live_pid(MENUBAR_FILE) is None:
+        _background(["--menubar"])
+
+
+def run_menubar():
+    """life --menubar: the menu bar icon (one at a time)."""
+    if sys.platform != "darwin":
+        raise SystemExit("--menubar is macOS only.")
+    if settings.live_pid(MENUBAR_FILE) not in (None, os.getpid()):
+        print("The Life in Life menu bar icon is already there.")
+        return
+    from .mac.menubar import MenuBar  # noqa: PLC0415 - needs pyobjc
+    MENUBAR_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MENUBAR_FILE.write_text(str(os.getpid()))
+    try:
+        MenuBar(is_running=lambda: running_pid() is not None, start=start_life,
+                stop=stop_life, settings=show_settings).run()
+    finally:
+        MENUBAR_FILE.unlink(missing_ok=True)
 
 
 def run_login(commands):
@@ -336,6 +388,9 @@ def main(argv=None):
         return
     if args.from_app:
         open_from_app()
+        return
+    if args.menubar:
+        run_menubar()
         return
     if args.detach and not os.environ.get(DETACHED_ENV):
         detach(argv, hide_terminal=args.wallpaper)

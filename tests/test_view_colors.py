@@ -103,6 +103,7 @@ class SettingsDialog(unittest.TestCase):
     WALL = "next\n" + settings.MODE_LABELS[settings.WALLPAPER]   # one monitor
     WIN = "next\n" + settings.MODE_LABELS[settings.WINDOW]
     SPEED2 = "next\n2 generations / second"
+    WALL_B, WIN_B = "wallpaper:2\t2: B", "window:2\t2: B"   # two monitors: the option printed
 
     def run_choose(self, *answers, monitors=("1: A", "2: B"), mode=settings.WALLPAPER):
         replies, prompts = iter(answers), []
@@ -126,28 +127,35 @@ class SettingsDialog(unittest.TestCase):
                          ("red", 2.0, 1, "wallpaper", 800))
 
     def test_mode_and_monitor_are_one_window(self):
-        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "save\nWallpaper on 2: B"),
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "save\n" + self.WALL_B),
                          ("red", 2.0, 2, "wallpaper", 800))
-        # Every mode on every monitor, the current one selected.
+        # A section per mode, each listing every monitor; the current one selected.
         options = self.prompts[2][4:]
-        self.assertEqual(options, ("Wallpaper on 1: A", "Wallpaper on 2: B",
-                                   "Window on 1: A", "Window on 2: B"))
-        self.assertEqual(self.prompts[2][1], "Wallpaper on 1: A")
+        self.assertEqual(options, ("#\t" + settings.MODE_LABELS[settings.WALLPAPER],
+                                   "wallpaper:1\t1: A", "wallpaper:2\t2: B",
+                                   "#\t" + settings.MODE_LABELS[settings.WINDOW],
+                                   "window:1\t1: A", "window:2\t2: B"))
+        self.assertEqual(self.prompts[2][1], "wallpaper:1\t1: A")
+
+    def test_a_heading_is_never_picked(self):
+        heading = "#\t" + settings.MODE_LABELS[settings.WINDOW]
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "save\n" + heading),
+                         ("red", 2.0, 1, "wallpaper", 800))
 
     def test_wallpaper_ends_after_where(self):
-        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\nWallpaper on 2: B"),
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\n" + self.WALL_B),
                          ("red", 2.0, 2, "wallpaper", 800))
 
     def test_window_mode_asks_for_a_size(self):
-        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\nWindow on 2: B",
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\n" + self.WIN_B,
                                          "save\n" + settings.size_label(600)),
                          ("red", 2.0, 2, "window", 600))
 
     def test_back_from_size_keeps_the_place(self):
-        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\nWindow on 2: B",
-                                         "back\n" + settings.size_label(600), "save\nWindow on 2: B"),
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\n" + self.WIN_B,
+                                         "back\n" + settings.size_label(600), "save\n" + self.WIN_B),
                          ("red", 2.0, 2, "window", 600))
-        self.assertEqual(self.prompts[4][1], "Window on 2: B")  # shown selected on the way back
+        self.assertEqual(self.prompts[4][1], self.WIN_B)  # shown selected on the way back
 
     def test_one_monitor_asks_only_the_mode(self):
         self.assertEqual(self.run_choose("next\nred", self.SPEED2, self.WIN,
@@ -158,8 +166,20 @@ class SettingsDialog(unittest.TestCase):
 
     def test_back_keeps_what_was_picked(self):
         self.assertEqual(self.run_choose("next\nred", "back\n2 generations / second",
-                                         "next\nblue", self.SPEED2, "save\nWallpaper on 2: B"),
+                                         "next\nblue", self.SPEED2, "save\n" + self.WALL_B),
                          ("blue", 2.0, 2, "wallpaper", 800))
+
+    def test_custom_size(self):
+        to_size = ("next\nred", self.SPEED2, "next\n" + self.WIN_B)
+        custom = "save\n" + settings.CUSTOM_SIZE
+        self.assertEqual(self.run_choose(*to_size, custom, "950"),
+                         ("red", 2.0, 2, "window", 950))
+        self.assertEqual(self.prompts[3][-1], settings.CUSTOM_SIZE)  # last in the size list
+        # Cancelling the box, or a size too small, goes back to the size list.
+        self.assertEqual(self.run_choose(*to_size, custom, "", "save\n" + settings.size_label(600)),
+                         ("red", 2.0, 2, "window", 600))
+        self.assertEqual(self.run_choose(*to_size, custom, "50", "", custom, "300"),
+                         ("red", 2.0, 2, "window", 300))
 
     def test_cancel(self):
         self.assertIsNone(self.run_choose("next\nred", ""))

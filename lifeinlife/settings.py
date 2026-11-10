@@ -54,6 +54,7 @@ MODE_LABELS = {WALLPAPER: "Wallpaper  (fills the monitor, behind your icons)",
                WINDOW: "Window  (a square you can move, draw in and resize)"}
 MIN_SIZE = 200  # smallest window, in points
 CUSTOM = "Custom hex colour…"
+CUSTOM_SIZE = "Custom size…"
 TITLE = "Life wallpaper"
 
 
@@ -108,7 +109,8 @@ def hud_text(spots):
 # only allows two buttons. argv: prompt, default, flags ("first" greys out Back, "last" drops
 # Next), swatches (JSON {option: ["#rrggbb", ...]}, "{}" for none), options... With swatches,
 # each option gets a little gradient beside it and a cell-grid preview of the selected one
-# sits above the list. Save is on the left, Back and Next on the right; cancelling is the title
+# sits above the list. An option "value\tshown" shows only the part after the tab (and prints
+# the whole thing); "#\tTitle" is a section heading, which can't be picked. Save is on the left, Back and Next on the right; cancelling is the title
 # bar's close button (or Esc). Prints "next\n<option>", "save\n<option>" or "back\n<option>",
 # nothing if cancelled. Return = Next (Save in the last window), double-click = Return.
 _PICK = r"""ObjC.import('Cocoa');
@@ -139,6 +141,8 @@ function run(argv) {
         img.unlockFocus;
         return img;
     }
+    function shown(opt) { var t = opt.indexOf('\t'); return t < 0 ? opt : opt.slice(t + 1); }
+    function heading(row) { return row >= 0 && opts[row].indexOf('#\t') === 0; }
     var rowImages = {};
     function rowImage(opt) {
         if (!(opt in rowImages)) rowImages[opt] = gradientImage(opt, 34, 12, 0);
@@ -158,12 +162,16 @@ function run(argv) {
             'tableView:objectValueForTableColumn:row:': {types: ['id', ['id', 'id', 'long']],
                 implementation: function (t, c, row) {
                     if (c.identifier.js === 's') return rowImage(opts[row]) || $();
-                    return $(opts[row]); }},
+                    return $(shown(opts[row])); }},
+            'tableView:isGroupRow:': {types: ['bool', ['id', 'long']], implementation: function (t, row) {
+                return heading(row); }},
+            'tableView:shouldSelectRow:': {types: ['bool', ['id', 'long']], implementation: function (t, row) {
+                return !heading(row); }},
             'tableViewSelectionDidChange:': {types: ['void', ['id']], implementation: function (n) {
                 showPreview(n.object.selectedRow); }},
             'clicked:': {types: ['void', ['id']], implementation: function (b) { $.NSApp.stopModalWithCode(b.tag); }},
             'doubleClicked:': {types: ['void', ['id']], implementation: function (t) {
-                if (t.clickedRow >= 0) $.NSApp.stopModalWithCode(hasNext ? 1 : 2); }},
+                if (t.clickedRow >= 0 && !heading(t.clickedRow)) $.NSApp.stopModalWithCode(hasNext ? 1 : 2); }},
             'windowWillClose:': {types: ['void', ['id']], implementation: function (n) { $.NSApp.stopModalWithCode(3); }}
         }
     });
@@ -214,7 +222,7 @@ function run(argv) {
     if (hasNext) button('Next', 1, W - 104, '\r');
     button('Cancel', 3, -200, '\u001b');  // out of sight: just for Esc
     var i = opts.indexOf(def);
-    if (i < 0) i = 0;
+    while (i < 0 || heading(i)) i++;  // not found: the first row that isn't a heading
     table.reloadData;
     table.selectRowIndexesByExtendingSelection($.NSIndexSet.indexSetWithIndex(i), false);
     table.scrollRowToVisible(i);
@@ -226,7 +234,7 @@ function run(argv) {
     var r = Number(app.runModalForWindow(win));
     var row = table.selectedRow;
     win.orderOut(null);
-    if (r === 3 || row < 0) return '';
+    if (r === 3 || row < 0 || heading(row)) return '';
     return ({1: 'next', 2: 'save', 4: 'back'})[r] + '\n' + opts[row];
 }""" % TITLE
 NEXT, SAVE, BACK = "next", "save", "back"
@@ -321,15 +329,22 @@ def parse_size(text):
 STEPS = ("color", "speed", "place", "size")
 
 
+HEADING = "#"  # place_options(): a section heading row, not something to pick
+
+
 def place_options(monitors, monitor):
-    """The one window that asks wallpaper or window, and on which monitor: [(label, mode,
-    monitor number)], every mode on every monitor. With one monitor (or none found) just the
-    two modes, on `monitor`."""
+    """The one window that asks wallpaper or window, and on which monitor: [(option, mode,
+    monitor number)]. With 2+ monitors, a section per mode (a heading row, mode None) listing
+    every monitor; with one monitor (or none found) just the two modes, on `monitor`."""
     if len(monitors) < 2:
         return [(label, mode, monitor) for mode, label in MODE_LABELS.items()]
-    return [(f"{'Wallpaper' if mode == WALLPAPER else 'Window'} on {screen}", mode,
-             int(screen.split(":", 1)[0]))
-            for mode in MODE_LABELS for screen in monitors]
+    rows = []
+    for mode, label in MODE_LABELS.items():
+        rows.append((f"{HEADING}\t{label}", None, None))
+        for screen in monitors:
+            n = int(screen.split(":", 1)[0])
+            rows.append((f"{mode}:{n}\t{screen}", mode, n))
+    return rows
 
 
 def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None):
@@ -389,18 +404,31 @@ def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None):
                 monitors = monitor_labels()
                 places = place_options(monitors, picked["monitor"])
                 several = len(monitors) > 1
-            current = next((label for label, m, n in places
+            current = next((opt for opt, m, n in places
                             if m == picked["mode"] and n == picked["monitor"]),
-                           next(label for label, m, _n in places if m == picked["mode"]))
+                           next(opt for opt, m, _n in places if m == picked["mode"]))
             where = f"{now['mode']} on monitor {now['monitor']}" if several else now["mode"]
             button, value = _pick(f"Show it as{', and where' if several else ''} (now: {where}):",
-                                  current, [label for label, _m, _n in places])
-            if value:
-                _label, picked["mode"], picked["monitor"] = next(p for p in places if p[0] == value)
+                                  current, [opt for opt, _m, _n in places])
+            place = next((p for p in places if p[0] == value and p[1] is not None), None)
+            if place:
+                _opt, picked["mode"], picked["monitor"] = place
         else:
             button, value = _pick(f"Window size (now: {now['size']}):", size_label(picked["size"]),
-                                  size_labels, last=True)
-            if value:
+                                  [*size_labels, CUSTOM_SIZE], last=True)
+            if value == CUSTOM_SIZE and button in (NEXT, SAVE):
+                value = _osascript(_ASK, f"Window size in points (at least {MIN_SIZE}), like 900:",
+                                   str(picked["size"]))
+                if not value:
+                    continue  # cancelled the size box: back to the size list
+                try:
+                    parse_size(value)
+                except ValueError as exc:
+                    _osascript(_ALERT, str(exc))
+                    continue
+                size_labels = [size_label(v) for v in sorted({*WINDOW_SIZES, int(size),
+                                                              parse_size(value)})]
+            if value and value != CUSTOM_SIZE:
                 picked["size"] = parse_size(value)
 
         if button is None:
