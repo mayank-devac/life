@@ -1,9 +1,13 @@
 """Command-line arguments and main()."""
 import argparse
+import importlib
 import os
 import shutil
+import shlex
+import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from .colors import NAMED_COLORS, THEMES, parse_color
@@ -11,6 +15,8 @@ from .config import DEFAULT_GRID, DEFAULT_SPEED, DETAIL_ZOOM, HELP, MAX_ZOOM, MI
 from .rules import PRESETS, parse_rule
 from . import settings
 from .settings import parse_speed
+
+APP_NAME = "Life in Life"
 
 
 def saved_defaults():
@@ -89,6 +95,15 @@ def parse_args(argv=None):
     p.add_argument("--load", metavar="FILE",
                    help="start from a pattern file (.rle, or .cells) instead of a random world; "
                         "you can also drop one onto the window")
+    p.add_argument("-d", "--detach", action="store_true",
+                   help="run in the background and give the terminal back (you can close it); "
+                        "with --wallpaper it also hides the terminal app so the wallpaper shows "
+                        "(Cmd+Tab brings it back). Stop it with Ctrl+Shift+Esc or life --stop")
+    p.add_argument("--stop", action="store_true",
+                   help="stop a copy started with --detach, then exit")
+    p.add_argument("--make-app", action="store_true",
+                   help=f"macOS: put a '{APP_NAME}' app in ~/Applications, so you can open it again "
+                        "from Spotlight, Launchpad, Finder or the Dock without a terminal, then exit")
     p.add_argument("--settings", action="store_true",
                    help="open the colour / speed / mode / size / monitor picker, save the choice for wall.sh, "
                         "then exit (Ctrl+Shift+S does the same while it runs)")
@@ -132,6 +147,139 @@ def list_monitors():
     for i, (w, h) in enumerate(pygame.display.get_desktop_sizes(), 1):
         print(f"  {i}: {w}x{h}{'  (primary)' if i == 1 else ''}")
     pygame.quit()
+
+
+PID_FILE = Path(tempfile.gettempdir()) / "lifeinlife-detached.pid"
+DETACHED_ENV = "LIFE_DETACHED"  # set in the background copy, so it doesn't detach again
+FROM_APP_ENV = "LIFE_FROM_APP"  # set by the app that --make-app writes
+DETACH_LOG = (Path.home() / "Library" / "Logs" / "life-detached.log" if sys.platform == "darwin"
+              else Path(tempfile.gettempdir()) / "life-detached.log")
+
+
+def _detached_pid():
+    """The pid of a copy started with --detach that is still running, else None."""
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        os.kill(pid, 0)  # raises if it's gone
+    except (OSError, ValueError):
+        return None
+    if sys.platform != "win32":
+        # The pid may have been reused by something else since: only trust it if it's us.
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                             capture_output=True, text=True).stdout
+        if "life" not in out:
+            return None
+    return pid
+
+
+def stop_detached():
+    pid = _detached_pid()
+    if pid is None:
+        print("No detached Life in Life is running.")
+        PID_FILE.unlink(missing_ok=True)
+        return False
+    os.kill(pid, signal.SIGTERM)  # app.py leaves its loop cleanly on SIGTERM
+    PID_FILE.unlink(missing_ok=True)
+    print(f"Stopped Life in Life (pid {pid}).")
+    return True
+
+
+def _frontmost_app():
+    """macOS: the app in front right now (the terminal this was typed in), or None."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        appkit = importlib.import_module("AppKit")
+    except ImportError:  # pyobjc is optional
+        return None
+    workspace = getattr(appkit, "NSWorkspace")
+    return workspace.sharedWorkspace().frontmostApplication()
+
+
+def detach(argv, hide_terminal):
+    """Start this same command again in the background, free of the terminal, and return.
+    Closing the terminal afterwards doesn't stop it (it's in its own session, so no SIGHUP)."""
+    if _detached_pid() is not None:
+        stop_detached()  # one at a time: the new one replaces it
+    terminal = _frontmost_app() if hide_terminal else None
+    package_root = str(Path(__file__).resolve().parent.parent)  # so a clone imports too
+    env = dict(os.environ, **{DETACHED_ENV: "1"})
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
+    rest = [a for a in argv if a not in ("-d", "--detach")]
+    DETACH_LOG.parent.mkdir(parents=True, exist_ok=True)
+    command = [sys.executable, "-c", "from lifeinlife.cli import main; main()", *rest]
+    with open(DETACH_LOG, "ab") as log:
+        if sys.platform == "win32":
+            child = subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        else:
+            child = subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
+                start_new_session=True)
+    PID_FILE.write_text(str(child.pid))
+    print(f"Life in Life is running in the background (pid {child.pid}).")
+    print("You can close this terminal. Stop it with Ctrl+Shift+Esc, or:  life --stop")
+    print(f"Log: {DETACH_LOG}")
+    if terminal is not None and terminal.processIdentifier() != child.pid:
+        terminal.hide()  # Cmd+Tab (or clicking it in the Dock) brings it back
+
+
+APP_SCRIPT = """#!/bin/bash
+# Opens {name}. Written by  life --make-app  (run it again to rewrite this).
+# Installed to start at login (life --login install)? Then start that one, with its settings.
+LABEL="com.$(id -un).life-wallpaper"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+if [ -f "$PLIST" ]; then
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null   # loaded already: no-op
+    exec launchctl kickstart "gui/$(id -u)/$LABEL"             # running already: no-op
+fi
+# Otherwise run life in the background, like  life -d  (with the saved colour, mode, ...).
+export PYTHONPATH={pythonpath}${{PYTHONPATH:+:$PYTHONPATH}}
+export {from_app}=1
+exec {python} -c 'from lifeinlife.cli import main; main()' --detach "$@"
+"""
+
+APP_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>{name}</string>
+    <key>CFBundleDisplayName</key><string>{name}</string>
+    <key>CFBundleIdentifier</key><string>io.github.lifeinlife.launcher</string>
+    <key>CFBundleExecutable</key><string>life</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <!-- The script only starts life and exits: no Dock icon of its own. -->
+    <key>LSUIElement</key><true/>
+</dict>
+</plist>
+"""
+
+
+def make_app():
+    """life --make-app: write ~/Applications/Life in Life.app, a launcher that needs no terminal."""
+    if sys.platform != "darwin":
+        raise SystemExit("--make-app is macOS only.")
+    app = Path.home() / "Applications" / f"{APP_NAME}.app"
+    macos = app / "Contents" / "MacOS"
+    macos.mkdir(parents=True, exist_ok=True)
+    (app / "Contents" / "Info.plist").write_text(APP_PLIST.format(name=APP_NAME))
+    exe = macos / "life"
+    package_root = str(Path(__file__).resolve().parent.parent)  # so a clone imports too
+    exe.write_text(APP_SCRIPT.format(name=APP_NAME, python=shlex.quote(sys.executable),
+                                     pythonpath=shlex.quote(package_root), from_app=FROM_APP_ENV))
+    exe.chmod(0o755)
+    # Tell Launch Services / Spotlight about it now, instead of whenever they next look.
+    lsregister = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+                  "LaunchServices.framework/Support/lsregister")
+    if os.path.exists(lsregister):
+        subprocess.run([lsregister, "-f", str(app)], capture_output=True)
+    print(f"Made {app}")
+    print(f"Open it from Spotlight (Cmd+Space, type \"{APP_NAME}\"), Launchpad or Finder;")
+    print("drag it to the Dock to keep it one click away.")
+    if "/Downloads/" in package_root or "/Desktop/" in package_root or "/Documents/" in package_root:
+        print(f"Note: it runs the code in {package_root}; don't move or delete that folder.")
 
 
 def run_login(commands):
@@ -179,6 +327,18 @@ def main(argv=None):
         print(f"Saved: colour {picked['color']}, speed {speed}/s, {picked['mode']}"
               + (f" {picked['size']}pt" if picked["mode"] == settings.WINDOW else "")
               + f", monitor {picked['monitor']}")
+        return
+    if args.stop:
+        raise SystemExit(0 if stop_detached() else 1)
+    if args.make_app:
+        make_app()
+        return
+    from_app = bool(os.environ.pop(FROM_APP_ENV, None))
+    if args.detach and not os.environ.get(DETACHED_ENV):
+        if from_app and _detached_pid() is not None:
+            return  # opening the app while it already runs leaves that one alone
+        # From the app there is no terminal to hide (the app in front is Finder or similar).
+        detach(argv, hide_terminal=args.wallpaper and not from_app)
         return
     print("Life in Life  -  shortcuts:")
     for keys, what in HELP:

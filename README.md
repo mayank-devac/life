@@ -26,6 +26,9 @@ Other commands:
 ```sh
 life                      # transparent floating window
 life --wallpaper          # live wallpaper, just this once (macOS)
+life --wallpaper -d       # same, in the background: the terminal hides and you can close it
+life --stop               # stop a copy started with -d (or press Ctrl+Shift+Esc)
+life --make-app           # a "Life in Life" app, to open it again from Spotlight / Dock
 life --help               # every option
 
 life --login status       # is it installed / running?
@@ -35,6 +38,19 @@ life --login monitors     # list monitors and their numbers
 life --login reset        # forget colour / speed / monitor choices
 life --login uninstall    # stop starting at login
 ```
+
+**Background (`-d` / `--detach`):** the terminal running `life` would otherwise sit on top of
+the wallpaper. With `-d` it starts in the background, gives the terminal back, and (in wallpaper
+mode) hides the terminal app; Cmd+Tab brings it back. Closing the terminal doesn't stop it.
+To **restart** it (e.g. after changing options), run the same `life ... -d` command again: it
+replaces the copy that's running. After `life --stop` or Ctrl+Shift+Esc, start it again the same way.
+Its output goes to `~/Library/Logs/life-detached.log`.
+
+**Open it again without a terminal:** run `life --make-app` once. It puts a **Life in Life** app
+in `~/Applications`, so after closing it (Ctrl+Shift+Esc) you can start it again from Spotlight
+(Cmd+Space, "Life in Life"), Launchpad or Finder, or drag it to the Dock. If you used
+`life --login install`, the app restarts that one, with its settings; otherwise it runs like
+`life -d` with your saved colour, mode and monitor. Opening it while it's already running does nothing.
 
 Update with `pipx upgrade lifeinlife` (or `uv tool upgrade lifeinlife`).
 
@@ -55,6 +71,7 @@ Edit the settings at the top of `wall.sh` (opacity, colour, monitor, zoom…), t
 
 ```sh
 ./wall.sh                 # run it now (Ctrl+C or Ctrl+Shift+Esc to stop)
+./wall.sh -d              # run it in the background; the terminal hides (life --stop to stop)
 ./login.sh install        # start it at every login
 ./login.sh status
 ./login.sh uninstall

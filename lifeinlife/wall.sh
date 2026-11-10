@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run Life in Life as a live wallpaper over your macOS desktop picture.
 # Edit the values below, then run:  ./wall.sh
-# Stop it with Ctrl+C here, or Ctrl+Shift+Esc. Ctrl+Shift+W unpins it so the other shortcuts work.
+# ./wall.sh -d runs it in the background and hides the terminal (run it again to restart).
+# Stop it with Ctrl+C here (or life --stop after -d), or Ctrl+Shift+Esc. Ctrl+Shift+W unpins it so the other shortcuts work.
 # Ctrl+Shift+S picks colour, speed, wallpaper or window (and its size) and monitor in a
 # small window, live (and remembers it).
 # To start it at every login, see login.sh.
