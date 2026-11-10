@@ -124,6 +124,7 @@ class LifeInLife:
         self.next_system_poll = 0.0
         self.next_screen_poll = 0.0
         self.follow_monitor = False  # wallpaper mode: keep the window on the chosen monitor
+        self.home = None  # normal mode: (monitor name, its frame, dx, dy, w, h) the window belongs at
         self.monitor_missing_since = None  # when the chosen monitor went away, or None
         self.placed = None  # (target frame, frame we actually got) after the last move
         self.hud = None        # the clickable step back / play / pause / speed / pin panel
@@ -150,6 +151,11 @@ class LifeInLife:
             mac.pin(frame=self.screen_frame)
             self._start_global_hotkeys()
             self.follow_monitor = True
+        elif self._get_mac() is not None:
+            target = self._monitor_frame(args.monitor)
+            if target is not None:
+                self._center_on(target)  # start on the chosen (or saved) monitor
+            self._remember_home()  # from now on, stay on that monitor
         if sys.platform == "darwin" and self._get_mac() is not None:
             self._show_hud()  # pinned or not: it has the pin / unpin button
         if args.load:
@@ -280,7 +286,7 @@ class LifeInLife:
 
     def change_speed(self, faster):
         """The next speed up (or down) from SPEEDS, wrapping round at either end, so the
-        panel's one "faster" button reaches them all. Saved for the wallpaper."""
+        panel's one "faster" button reaches them all. Saved for the next start."""
         choices = [s for s in SPEEDS if s <= 1 / self.dt] or [1 / self.dt]
         if faster:
             bigger = [s for s in choices if s > self.speed + 1e-9]
@@ -291,11 +297,10 @@ class LifeInLife:
         self.set_speed(speed)
         text = settings.speed_text(speed)
         self.toast(f"Speed {text} generation{'' if text == '1' else 's'} / second")
-        if self.wallpaper_mode:
-            try:
-                settings.save(speed=text)
-            except OSError:
-                pass  # applied anyway, just not remembered
+        try:
+            settings.save(speed=text)
+        except OSError:
+            pass  # applied anyway, just not remembered
 
     @property
     def status(self):
@@ -438,15 +443,20 @@ class LifeInLife:
             self.base_color = color_name
         self.set_speed(min(speed, 1 / self.dt))
         self.monitor = monitor
-        if self.wallpaper_mode and self.mac is not None:
-            # Cover the chosen monitor, pinned or not, even if it's the one already chosen:
-            # the window may have been moved off it (e.g. by macOS while it was asleep).
-            # The frame carries its size and position, so a different resolution is
-            # picked up too (via WINDOWSIZECHANGED).
-            self.monitor_missing_since = None
+        if self.mac is not None:
             target = self._monitor_frame(monitor)
-            if target is not None:
-                self._cover(target, force=True)
+            if self.wallpaper_mode:
+                # Cover the chosen monitor, pinned or not, even if it's the one already chosen:
+                # the window may have been moved off it (e.g. by macOS while it was asleep).
+                # The frame carries its size and position, so a different resolution is
+                # picked up too (via WINDOWSIZECHANGED).
+                self.monitor_missing_since = None
+                if target is not None:
+                    self._cover(target, force=True)
+            elif target is not None:
+                self._center_on(target)  # normal window: move it over to that monitor
+            else:
+                self.toast(f"Monitor {monitor} isn't connected", 3)
         self.painter.invalidate()
         try:
             speed_text = settings.speed_text(self.speed)
@@ -577,6 +587,9 @@ class LifeInLife:
                     self._paint_to(cell)
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button in (1, 2, 3):
+            if self.drag_mode == "move":
+                self.drag_mode = None
+                self._remember_home()  # dragged to a new spot (maybe another monitor): stay there
             self.drag_mode = None
 
         elif event.type == pygame.MOUSEMOTION:
@@ -605,6 +618,9 @@ class LifeInLife:
             self.hovered = False
             self.mouse = None  # hide the brush preview
         elif event.type == pygame.WINDOWFOCUSLOST:
+            if self.drag_mode == "move":
+                self.drag_mode = None
+                self._remember_home()
             self.drag_mode = None  # don't get stuck dragging if the button-up happened elsewhere
         elif event.type in SIZE_EVENTS:
             self._sync_size()
@@ -635,6 +651,102 @@ class LifeInLife:
             self.painter.invalidate()
         self.screen_frame = target
         self.placed = (want, self._frame_key(mac.frame()))
+
+    def _center_on(self, target):
+        """Normal (windowed) mode: move the window to the middle of monitor frame `target`,
+        keeping its size (shrunk if the monitor is smaller). Left alone if it's already there."""
+        mac = self.mac
+        if mac is None:
+            return
+        f = mac.frame()
+        mid_x, mid_y = f.origin.x + f.size.width / 2, f.origin.y + f.size.height / 2
+        t = target
+        if (t.origin.x <= mid_x < t.origin.x + t.size.width
+                and t.origin.y <= mid_y < t.origin.y + t.size.height):
+            self._remember_home()
+            return  # already on that monitor: keep where the user put it
+        w, h = min(f.size.width, t.size.width), min(f.size.height, t.size.height)
+        x = t.origin.x + (t.size.width - w) / 2
+        y = t.origin.y + (t.size.height - h) / 2
+        mac.set_frame(((x, y), (w, h)))
+        self._sync_size()
+        self.painter.invalidate()
+        self._remember_home()
+
+    # ---- normal mode: stay on its monitor
+    @staticmethod
+    def _screen_at(frame):
+        """(number, name, frame) of the monitor under the middle of `frame`, or None."""
+        from .mac.window import mac_screens  # noqa: PLC0415
+        mid_x = frame.origin.x + frame.size.width / 2
+        mid_y = frame.origin.y + frame.size.height / 2
+        for i, (name, s) in enumerate(mac_screens() or [], 1):
+            if (s.origin.x <= mid_x < s.origin.x + s.size.width
+                    and s.origin.y <= mid_y < s.origin.y + s.size.height):
+                return i, name, s
+        return None
+
+    def _remember_home(self):
+        """Normal mode: the window is where it belongs (the user or we just put it there).
+        Remember the monitor (by name, so a reordered monitor list doesn't matter) and the
+        window's spot and size on it."""
+        if self.wallpaper_mode or self.mac is None:
+            return
+        f = self.mac.frame()
+        here = self._screen_at(f)
+        if here is None:
+            return
+        number, name, s = here
+        self.home = (name, self._frame_key(s), f.origin.x - s.origin.x, f.origin.y - s.origin.y,
+                     f.size.width, f.size.height)
+        self.monitor = number  # what the settings dialog shows as "now"
+
+    def _home_screen(self):
+        """The frame of the monitor the window belongs on, or None if it isn't connected.
+        Same name and frame first; then the same name (its resolution may have changed)."""
+        from .mac.window import mac_screens  # noqa: PLC0415
+        name, key = self.home[:2]
+        screens = [s for n, s in mac_screens() or [] if n == name]
+        exact = [s for s in screens if self._frame_key(s) == key]
+        return (exact or screens or [None])[0]
+
+    def _keep_home(self, now):
+        """Normal mode, pinned or not: if macOS moved the window to another monitor (sleep,
+        a monitor dropping out), put it back where it was once its monitor is there. Moves
+        on the same monitor are taken as the user's. If the monitor is gone, wait
+        MONITOR_GRACE seconds, then make sure the window is on some screen."""
+        if self.home is None or self.mac is None or self.drag_mode == "move":
+            return
+        name, _, dx, dy, w, h = self.home
+        f = self.mac.frame()
+        here = self._screen_at(f)
+        screen = self._home_screen()
+        if screen is None:
+            if self.monitor_missing_since is None:
+                self.monitor_missing_since = now
+                print(f"Monitor {name} disconnected: waiting for it to come back.", flush=True)
+            if now - self.monitor_missing_since >= MONITOR_GRACE and here is None:
+                primary = self._monitor_frame(1)
+                if primary is not None:  # off every screen: bring it onto the primary one
+                    w0, h0 = min(f.size.width, primary.size.width), min(f.size.height, primary.size.height)
+                    self.mac.set_frame(((primary.origin.x + (primary.size.width - w0) / 2,
+                                         primary.origin.y + (primary.size.height - h0) / 2), (w0, h0)))
+                    self._sync_size()
+                    self.painter.invalidate()
+            return
+        if self.monitor_missing_since is not None:
+            self.monitor_missing_since = None
+            print(f"Monitor {name} is back: moving the window onto it again.", flush=True)
+        if here is not None and self._frame_key(here[2]) == self._frame_key(screen):
+            self._remember_home()  # on its monitor: any move here is the user's
+            return
+        # On the wrong monitor (or none): back to its spot, kept inside the screen.
+        w, h = min(w, screen.size.width), min(h, screen.size.height)
+        x = min(max(screen.origin.x + dx, screen.origin.x), screen.origin.x + screen.size.width - w)
+        y = min(max(screen.origin.y + dy, screen.origin.y), screen.origin.y + screen.size.height - h)
+        self.mac.set_frame(((x, y), (w, h)))
+        self._sync_size()
+        self.painter.invalidate()
 
     def _follow_monitor(self, now):
         """Wallpaper mode: keep the window on the chosen monitor.
@@ -680,9 +792,13 @@ class LifeInLife:
                     self.painter.invalidate()
                     self.next_tick = now  # carry on from here; don't replay the hidden time
                 self.hidden = reason
-        if self.follow_monitor and now >= self.next_screen_poll:
-            self.next_screen_poll = now + SCREEN_POLL
-            self._follow_monitor(now)
+        if now >= self.next_screen_poll:
+            if self.follow_monitor:
+                self.next_screen_poll = now + SCREEN_POLL
+                self._follow_monitor(now)
+            elif self.home is not None:
+                self.next_screen_poll = now + SCREEN_POLL
+                self._keep_home(now)
 
     # ---- simulation and drawing
     def update(self):

@@ -9,7 +9,29 @@ from pathlib import Path
 from .colors import NAMED_COLORS, THEMES, parse_color
 from .config import DEFAULT_GRID, DEFAULT_SPEED, DETAIL_ZOOM, HELP, MAX_ZOOM, MIN_GRID, MIN_ZOOM
 from .rules import PRESETS, parse_rule
+from . import settings
 from .settings import parse_speed
+
+
+def saved_defaults():
+    """Colour / speed / monitor saved by the settings window (Ctrl+Shift+S), as argparse
+    defaults, so a plain `life` starts with them too, not only wall.sh. Bad values are skipped."""
+    saved, defaults = settings.load(), {}
+    if "color" in saved:
+        try:
+            parse_color(saved["color"])
+            defaults["color"] = saved["color"]
+        except argparse.ArgumentTypeError:
+            pass
+    if "speed" in saved:
+        try:
+            parse_speed(saved["speed"])
+            defaults["speed"] = saved["speed"]
+        except ValueError:
+            pass
+    if saved.get("monitor", "").isdigit() and int(saved["monitor"]) >= 1:
+        defaults["monitor"] = int(saved["monitor"])
+    return defaults
 
 
 def parse_args(argv=None):
@@ -18,8 +40,9 @@ def parse_args(argv=None):
                    help="macOS: run as a live wallpaper (behind desktop icons, on all Spaces, "
                         "click-through). Needs pyobjc-framework-Cocoa.")
     p.add_argument("--monitor", type=int, default=1,
-                   help="with --wallpaper: which monitor to cover, 1 = primary (default), "
-                        "2 = second, ... (see --list-monitors)")
+                   help="which monitor to use, 1 = primary (default), 2 = second, ... "
+                        "(see --list-monitors). --wallpaper covers it; otherwise the window "
+                        "opens in its middle")
     p.add_argument("--list-monitors", action="store_true",
                    help="print the connected monitors and their numbers, then exit")
     p.add_argument("--solid", action="store_true",
@@ -61,6 +84,7 @@ def parse_args(argv=None):
                    help="macOS: start the wallpaper at every login. --login install | uninstall | "
                         "status | color <name> | speed <n> | monitor <n> | monitors | reset "
                         "(no command: the settings window). Must come first.")
+    p.set_defaults(**saved_defaults())  # what the settings window saved; flags still win
     args = p.parse_args(argv)
     args.grid = max(MIN_GRID, args.grid)
     args.fps = max(1, args.fps)
