@@ -31,14 +31,25 @@ def saved_defaults():
             pass
     if saved.get("monitor", "").isdigit() and int(saved["monitor"]) >= 1:
         defaults["monitor"] = int(saved["monitor"])
+    if saved.get("mode") in (settings.WALLPAPER, settings.WINDOW):
+        defaults["mode"] = saved["mode"]
+    if "size" in saved:
+        try:
+            defaults["size"] = settings.parse_size(saved["size"])
+        except ValueError:
+            pass
     return defaults
 
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Conway's Game of Life inside Conway's Game of Life.")
-    p.add_argument("--wallpaper", action="store_true",
+    # --wallpaper / --window: the last one given wins (wall.sh puts the saved mode after its own).
+    p.add_argument("--wallpaper", dest="mode", action="store_const", const=settings.WALLPAPER,
                    help="macOS: run as a live wallpaper (behind desktop icons, on all Spaces, "
                         "click-through). Needs pyobjc-framework-Cocoa.")
+    p.add_argument("--window", dest="mode", action="store_const", const=settings.WINDOW,
+                   help="run in a window (the default, unless Ctrl+Shift+S saved wallpaper mode)")
+    p.set_defaults(mode=settings.WINDOW)
     p.add_argument("--monitor", type=int, default=1,
                    help="which monitor to use, 1 = primary (default), 2 = second, ... "
                         "(see --list-monitors). --wallpaper covers it; otherwise the window "
@@ -53,7 +64,8 @@ def parse_args(argv=None):
     p.add_argument("--opacity", type=float, default=1.0,
                    help="opacity of the whole window, 0.1-1.0 (default 1.0)")
     p.add_argument("--size", type=int, default=800,
-                   help="window size in points (default 800; --wallpaper always fills the screen)")
+                   help=f"window size in points (default 800, min {settings.MIN_SIZE}; "
+                        f"--wallpaper always fills the screen)")
     p.add_argument("--zoom", type=float, default=1.0,
                    help=f"start-up scale {MIN_ZOOM:g}-{MAX_ZOOM:g}: bigger = larger cells "
                         f"(inner life shows from {DETAIL_ZOOM})")
@@ -78,7 +90,7 @@ def parse_args(argv=None):
                    help="start from a pattern file (.rle, or .cells) instead of a random world; "
                         "you can also drop one onto the window")
     p.add_argument("--settings", action="store_true",
-                   help="open the colour / speed / monitor picker, save the choice for wall.sh, "
+                   help="open the colour / speed / mode / size / monitor picker, save the choice for wall.sh, "
                         "then exit (Ctrl+Shift+S does the same while it runs)")
     p.add_argument("--login", nargs="*", metavar="COMMAND",
                    help="macOS: start the wallpaper at every login. --login install | uninstall | "
@@ -86,6 +98,8 @@ def parse_args(argv=None):
                         "(no command: the settings window). Must come first.")
     p.set_defaults(**saved_defaults())  # what the settings window saved; flags still win
     args = p.parse_args(argv)
+    args.wallpaper = args.mode == settings.WALLPAPER
+    args.size = max(settings.MIN_SIZE, args.size)
     args.grid = max(MIN_GRID, args.grid)
     args.fps = max(1, args.fps)
     args.color_name = args.color  # the text, to show and save; args.color is the parsed value
@@ -153,15 +167,18 @@ def main(argv=None):
     if args.settings:
         from . import settings  # noqa: PLC0415
         print("Opening settings…", flush=True)
-        picked = settings.choose(args.color_name, args.monitor, args.speed,
+        picked = settings.choose(args.color_name, args.monitor, args.speed, args.mode, args.size,
                                  progress=lambda text: print(text, flush=True))
         if picked is None:
             print("Cancelled.")
             raise SystemExit(1)
-        color, speed, monitor = picked
         print("Saving…", flush=True)
-        settings.save(color=color, speed=settings.speed_text(speed), monitor=monitor)
-        print(f"Saved: colour {color}, speed {settings.speed_text(speed)}/s, monitor {monitor}")
+        speed = settings.speed_text(picked["speed"])
+        settings.save(color=picked["color"], speed=speed, monitor=picked["monitor"],
+                      mode=picked["mode"], size=picked["size"])
+        print(f"Saved: colour {picked['color']}, speed {speed}/s, {picked['mode']}"
+              + (f" {picked['size']}pt" if picked["mode"] == settings.WINDOW else "")
+              + f", monitor {picked['monitor']}")
         return
     print("Life in Life  -  shortcuts:")
     for keys, what in HELP:

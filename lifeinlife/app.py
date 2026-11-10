@@ -74,6 +74,7 @@ class LifeInLife:
         self.WAKE = pygame.event.custom_type()  # posted by global hotkeys to end a wait early
         self.wallpaper_mode = args.wallpaper
         self.monitor = args.monitor
+        self.size = args.size  # window size in points (wallpaper mode: for switching back)
         self.color_name = args.color_name
         # A single colour you picked (Ctrl+Shift+K cycles back to it after the themes)
         self.base_color = args.color_name if args.color_name not in ("multi", *THEMES) else "white"
@@ -415,6 +416,8 @@ class LifeInLife:
         if self.dialog is not None and self.dialog.is_alive():
             return  # already open
         color, monitor, speed = self.color_name, self.monitor, self.speed
+        mode = settings.WALLPAPER if self.wallpaper_mode else settings.WINDOW
+        size = self.size if self.wallpaper_mode else round(self.window.size[0])
         self.toast("Opening settings…", 3)  # osascript takes a moment to show the window
 
         def tell(kind, value):
@@ -426,7 +429,8 @@ class LifeInLife:
                 pass  # still seen on the next wake-up, at most MAX_WAIT later
 
         def ask():
-            picked = settings.choose(color, monitor, speed, progress=lambda text: tell("toast", text))
+            picked = settings.choose(color, monitor, speed, mode, size,
+                                     progress=lambda text: tell("toast", text))
             if picked is None:
                 tell("toast", None)  # cancelled
             else:
@@ -435,35 +439,87 @@ class LifeInLife:
         self.dialog = threading.Thread(target=ask, name="settings-dialog", daemon=True)
         self.dialog.start()
 
-    def apply_settings(self, color_name, speed, monitor):
-        """Apply a choice from the dialog right away, and save it for the next start."""
+    def apply_settings(self, picked):
+        """Apply a choice from the dialog right away, and save it for the next start.
+        `picked` is settings.choose()'s {"color", "speed", "monitor", "mode", "size"}."""
+        color_name, monitor, size = picked["color"], picked["monitor"], picked["size"]
         self.world.set_color(parse_color(color_name))  # the dialog already checked it
         self.color_name = color_name
         if color_name not in ("multi", *THEMES):
             self.base_color = color_name
-        self.set_speed(min(speed, 1 / self.dt))
+        self.set_speed(min(picked["speed"], 1 / self.dt))
         self.monitor = monitor
-        if self.mac is not None:
+        self.size = size
+        mode = picked["mode"]
+        if self.mac is None:
+            if mode == settings.WALLPAPER and not self.wallpaper_mode:
+                self.toast(f"Wallpaper mode {self.mac_error}", 3.5)
+                mode = settings.WINDOW
+            self.window.size = (size, size)  # no monitor control without pyobjc
+            self._sync_size()
+        else:
+            switching = (mode == settings.WALLPAPER) != self.wallpaper_mode
             target = self._monitor_frame(monitor)
-            if self.wallpaper_mode:
+            if target is None:
+                self.toast(f"Monitor {monitor} isn't connected", 3)
+            if mode == settings.WALLPAPER:
+                if switching:
+                    self._become_wallpaper()
                 # Cover the chosen monitor, pinned or not, even if it's the one already chosen:
                 # the window may have been moved off it (e.g. by macOS while it was asleep).
                 # The frame carries its size and position, so a different resolution is
                 # picked up too (via WINDOWSIZECHANGED).
                 self.monitor_missing_since = None
+                target = target or self._monitor_frame(1)
                 if target is not None:
                     self._cover(target, force=True)
-            elif target is not None:
-                self._center_on(target)  # normal window: move it over to that monitor
             else:
-                self.toast(f"Monitor {monitor} isn't connected", 3)
+                if switching:
+                    self._become_window()
+                target = target or self._monitor_frame(1)
+                if target is not None:
+                    # Normal window: move it over to that monitor, at the chosen size. Coming
+                    # out of wallpaper mode, it starts in the monitor's middle.
+                    self._center_on(target, size, middle=switching)
         self.painter.invalidate()
         try:
             speed_text = settings.speed_text(self.speed)
-            settings.save(color=color_name, speed=speed_text, monitor=monitor)
-            self.toast(f"Colour {color_name}  -  {speed_text}/s  -  monitor {monitor}", 2.5)
+            settings.save(color=color_name, speed=speed_text, monitor=monitor, mode=mode, size=size)
+            shown = "wallpaper" if mode == settings.WALLPAPER else f"window {size}pt"
+            self.toast(f"Colour {color_name}  -  {speed_text}/s  -  {shown}  -  monitor {monitor}", 2.5)
         except OSError as exc:
             self.toast(f"Applied, but couldn't save it ({exc.strerror})", 3.5)
+
+    def _become_wallpaper(self):
+        """Switch from a window to wallpaper mode: pinned, covering the chosen monitor (the
+        caller moves it there), following that monitor."""
+        mac = self.mac
+        if mac is None:
+            return
+        self.wallpaper_mode = True
+        self.home = None  # the window-mode "stay on this monitor" check is off now
+        self.drag_mode = None
+        if not mac.pinned:
+            mac.pin()
+            self._start_global_hotkeys()
+        self.follow_monitor = True
+        self.placed = None
+        self.show_help = False
+        self._show_hud()
+
+    def _become_window(self):
+        """Switch from wallpaper mode to a window: unpinned, clickable, its own size (the
+        caller sizes and places it)."""
+        mac = self.mac
+        if mac is None:
+            return
+        self.wallpaper_mode = False
+        self.follow_monitor = False
+        self.monitor_missing_since = None
+        if mac.pinned:
+            mac.unpin()
+            mac.unwatch_hotkeys()
+        self._show_hud()
 
     # ---- brushes, saving and loading
     def brush_pattern(self):
@@ -652,22 +708,30 @@ class LifeInLife:
         self.screen_frame = target
         self.placed = (want, self._frame_key(mac.frame()))
 
-    def _center_on(self, target):
-        """Normal (windowed) mode: move the window to the middle of monitor frame `target`,
-        keeping its size (shrunk if the monitor is smaller). Left alone if it's already there."""
+    def _center_on(self, target, size=None, middle=False):
+        """Normal (windowed) mode: put the window on monitor frame `target`, `size` points
+        square (None: keep its size), shrunk to fit the monitor. Already on that monitor, it
+        stays where the user put it (resized around its middle) unless `middle`; otherwise
+        it goes to the monitor's middle."""
         mac = self.mac
         if mac is None:
             return
-        f = mac.frame()
+        f, t = mac.frame(), target
         mid_x, mid_y = f.origin.x + f.size.width / 2, f.origin.y + f.size.height / 2
-        t = target
-        if (t.origin.x <= mid_x < t.origin.x + t.size.width
-                and t.origin.y <= mid_y < t.origin.y + t.size.height):
-            self._remember_home()
-            return  # already on that monitor: keep where the user put it
-        w, h = min(f.size.width, t.size.width), min(f.size.height, t.size.height)
-        x = t.origin.x + (t.size.width - w) / 2
-        y = t.origin.y + (t.size.height - h) / 2
+        on_it = (t.origin.x <= mid_x < t.origin.x + t.size.width
+                 and t.origin.y <= mid_y < t.origin.y + t.size.height)
+        w, h = (f.size.width, f.size.height) if size is None else (size, size)
+        w, h = min(w, t.size.width), min(h, t.size.height)
+        if on_it and not middle:
+            if (w, h) == (f.size.width, f.size.height):
+                self._remember_home()
+                return  # nothing to change: keep where the user put it
+            x, y = mid_x - w / 2, mid_y - h / 2  # resize around its middle...
+        else:
+            x, y = t.origin.x + (t.size.width - w) / 2, t.origin.y + (t.size.height - h) / 2
+        # ...kept inside the monitor
+        x = min(max(x, t.origin.x), t.origin.x + t.size.width - w)
+        y = min(max(y, t.origin.y), t.origin.y + t.size.height - h)
         mac.set_frame(((x, y), (w, h)))
         self._sync_size()
         self.painter.invalidate()
@@ -705,6 +769,8 @@ class LifeInLife:
         """The frame of the monitor the window belongs on, or None if it isn't connected.
         Same name and frame first; then the same name (its resolution may have changed)."""
         from .mac.window import mac_screens  # noqa: PLC0415
+        if self.home is None:
+            return None
         name, key = self.home[:2]
         screens = [s for n, s in mac_screens() or [] if n == name]
         exact = [s for s in screens if self._frame_key(s) == key]
@@ -896,7 +962,7 @@ class LifeInLife:
                         self.toast("Applying…", 3)
                         if not self.hidden:
                             self.draw()  # show it before the (brief) work starts
-                        self.apply_settings(*value)
+                        self.apply_settings(value)
                     elif value is None:
                         self.toast_until = 0.0  # cancelled: drop the "…" message
                     else:

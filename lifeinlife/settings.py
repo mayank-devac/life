@@ -1,8 +1,9 @@
-"""Colour/speed/monitor choices picked with Ctrl+Shift+S (or ./login.sh): the dialog and
-the `settings` file that keeps them. Nothing here imports pygame.
+"""Colour / speed / mode / window size / monitor choices picked with Ctrl+Shift+S (or
+./login.sh): the dialog and the `settings` file that keeps them. Nothing here imports pygame.
 
-The file sits next to wall.sh as plain `key=value` lines (color=red, speed=4, monitor=2).
-wall.sh passes them on as --color / --speed / --monitor, after its own values, so they win.
+The file sits next to wall.sh as plain `key=value` lines (color=red, speed=4, monitor=2,
+mode=window, size=600). wall.sh passes them on as --color / --speed / --monitor / --window
+or --wallpaper / --size, after its own values, so they win.
 It also keeps where the control panel was dragged on each monitor (hud=ARZOPA@20,20;LG@40,120),
 which only the app reads."""
 import argparse
@@ -12,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 from .colors import NAMED_COLORS, THEMES, parse_color, preview_stops
-from .config import SPEEDS
+from .config import SPEEDS, WINDOW_SIZES
 
 
 def _settings_file():
@@ -28,7 +29,11 @@ def _settings_file():
 
 
 SETTINGS_FILE = _settings_file()
-KEYS = ("color", "speed", "monitor", "hud")
+KEYS = ("color", "speed", "monitor", "mode", "size", "hud")
+WALLPAPER, WINDOW = "wallpaper", "window"   # the two modes (saved as mode=...)
+MODE_LABELS = {WALLPAPER: "Wallpaper  (fills the monitor, behind your icons)",
+               WINDOW: "Window  (a square you can move, draw in and resize)"}
+MIN_SIZE = 200  # smallest window, in points
 CUSTOM = "Custom hex colour…"
 TITLE = "Life wallpaper"
 
@@ -277,29 +282,69 @@ def parse_speed(text):
     return value
 
 
-def choose(color, monitor, speed=15, progress=None):
-    """Ask for a colour, then a speed, then a monitor (skipped with only one screen).
+def size_label(size):
+    """800 -> "800 × 800 points"."""
+    return f"{int(size)} × {int(size)} points"
+
+
+def parse_size(text):
+    """"800" or a dialog label -> window size in points (>= MIN_SIZE). ValueError otherwise."""
+    try:
+        value = int(str(text).split()[0])
+    except (ValueError, IndexError):
+        value = 0
+    if value < MIN_SIZE:
+        raise ValueError(f"window size must be a whole number of points, at least {MIN_SIZE}, "
+                         f"not {text!r}")
+    return value
+
+
+STEPS = ("color", "speed", "mode", "size", "monitor")
+
+
+def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None):
+    """Ask for a colour, a speed, wallpaper or window, the window's size (only for a
+    window), then a monitor (skipped with only one screen).
     Each window has Next (go on to the next one), Save (stop here, keeping the current
     values of the later windows) and Back (what you picked in it is kept); closing it cancels.
     `color` is the current colour's text ("multi", "heat", "red", "#ff8800"), `speed` the
-    outer generations per second, `monitor` its number. `progress(text)`, if given, is
-    told about the pause before the monitor window.
-    Returns (color_text, speed, monitor_number), or None if cancelled."""
+    outer generations per second, `monitor` its number, `mode` WALLPAPER or WINDOW, `size`
+    the window's size in points. `progress(text)`, if given, is told about the pause before
+    the monitor window.
+    Returns {"color", "speed", "monitor", "mode", "size"}, or None if cancelled."""
     progress = progress or (lambda _text: None)
     names = ["multi", *THEMES, *NAMED_COLORS]
     speed_labels = [speed_label(v) for v in sorted({*SPEEDS, float(speed)})]
-    now = f"(now: {color})", f"(now: {speed_label(speed)})"
-    picked, monitors, step = [color, float(speed), monitor], [], 0  # monitors: loaded on the way to that window
+    size_labels = [size_label(v) for v in sorted({*WINDOW_SIZES, int(size)})]
+    mode = mode if mode in MODE_LABELS else WINDOW
+    now = {"color": color, "speed": speed_label(speed), "mode": mode, "size": size_label(size)}
+    picked = {"color": color, "speed": float(speed), "monitor": monitor, "mode": mode,
+              "size": int(size)}
+    monitors = None  # loaded on the way to that window
+
+    def wanted(step):
+        nonlocal monitors
+        if step == "size":
+            return picked["mode"] == WINDOW
+        if step == "monitor":
+            if monitors is None:
+                progress("Loading monitors…")
+                monitors = monitor_labels()
+            return len(monitors) > 1  # only one screen: nothing to ask
+        return True
+
+    i = 0
     while True:
-        if step == 0:
-            default = picked[0] if picked[0] in names else CUSTOM
+        step = STEPS[i]
+        if step == "color":
+            default = picked["color"] if picked["color"] in names else CUSTOM
             swatches = {name: preview_stops(name) for name in names}
             if default == CUSTOM:
-                swatches[CUSTOM] = preview_stops(picked[0])  # the hex colour in use
-            button, value = _pick(f"Cell colour {now[0]}:", default, [*names, CUSTOM], first=True,
-                                  swatches=swatches)
+                swatches[CUSTOM] = preview_stops(picked["color"])  # the hex colour in use
+            button, value = _pick(f"Cell colour (now: {now['color']}):", default, [*names, CUSTOM],
+                                  first=True, swatches=swatches)
             if value == CUSTOM and button in (NEXT, SAVE):
-                hex_default = picked[0] if picked[0] not in names else "#ff8800"
+                hex_default = picked["color"] if picked["color"] not in names else "#ff8800"
                 value = _osascript(_ASK, "Hex colour, like #ff8800:", hex_default)
                 if not value:
                     continue  # cancelled the hex box: back to the colour list
@@ -309,25 +354,40 @@ def choose(color, monitor, speed=15, progress=None):
                     _osascript(_ALERT, str(exc))
                     continue
             if value and value != CUSTOM:
-                picked[0] = value
-        elif step == 1:
-            button, value = _pick(f"Speed {now[1]}:", speed_label(picked[1]), speed_labels)
+                picked["color"] = value
+        elif step == "speed":
+            button, value = _pick(f"Speed (now: {now['speed']}):", speed_label(picked["speed"]),
+                                  speed_labels)
             if value:
-                picked[1] = parse_speed(value)
+                picked["speed"] = parse_speed(value)
+        elif step == "mode":
+            labels = list(MODE_LABELS.values())
+            button, value = _pick(f"Show it as (now: {now['mode']}):", MODE_LABELS[picked["mode"]],
+                                  labels)
+            if value:
+                picked["mode"] = next(m for m, label in MODE_LABELS.items() if label == value)
+        elif step == "size":
+            button, value = _pick(f"Window size (now: {now['size']}):", size_label(picked["size"]),
+                                  size_labels)
+            if value:
+                picked["size"] = parse_size(value)
         else:
-            current = next((l for l in monitors if l.startswith(f"{picked[2]}:")), monitors[0])
-            button, value = _pick("Which monitor should it cover?", current, monitors, last=True)
+            screens = monitors or []  # loaded by wanted("monitor"): 2+ entries to get here
+            current = next((l for l in screens if l.startswith(f"{picked['monitor']}:")), screens[0])
+            question = ("Which monitor should it cover?" if picked["mode"] == WALLPAPER
+                        else "Which monitor should the window open on?")
+            button, value = _pick(question, current, screens, last=True)
             if value:
-                picked[2] = int(value.split(":", 1)[0])
+                picked["monitor"] = int(value.split(":", 1)[0])
 
         if button is None:
             return None
         if button == SAVE:
-            return tuple(picked)
-        step += -1 if button == BACK else 1
-        if step == 2:
-            if not monitors:
-                progress("Loading monitors…")
-                monitors = monitor_labels()
-            if len(monitors) <= 1:
-                return tuple(picked)  # only one screen: nothing to ask
+            return picked
+        move = -1 if button == BACK else 1
+        i += move
+        while 0 <= i < len(STEPS) and not wanted(STEPS[i]):
+            i += move
+        if i >= len(STEPS):
+            return picked  # no more windows to show
+        i = max(i, 0)

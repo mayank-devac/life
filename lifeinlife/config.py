@@ -7,6 +7,7 @@ MICRO_SIZE = 16        # inner grid inside every outer cell (each cell has its o
 MACRO_EVERY = 15       # outer grid steps once every N frames (default: --speed 2 at 30 fps)
 DEFAULT_SPEED = 15.0    # outer generations per second
 SPEEDS = (0.5, 1, 2, 4, 8, 15, 30)  # choices in the Ctrl+Shift+S dialog
+WINDOW_SIZES = (400, 500, 600, 700, 800, 1000, 1200, 1400, 1600)  # window sizes there, in points
 STALE_STEPS = 40       # reseed after this many outer steps with no real change
 HISTORY = 30           # a world repeating itself with any period up to this counts as settled
 REWIND = 200           # outer generations you can step back through (and hand-made changes)
@@ -67,7 +68,7 @@ HELP = [
     ("Ctrl+Shift + K", "next colour theme"),
     ("Ctrl+Shift + F", "effects: trails, age glow, flashes"),
     ("Ctrl+Shift + Up / Down", "opacity"),
-    ("Ctrl+Shift + S", "settings: colour, speed, monitor"),
+    ("Ctrl+Shift + S", "settings: colour, speed, wallpaper / window, size, monitor"),
     ("Ctrl+Shift + W", "pin to desktop (wallpaper) / unpin"),
     ("Ctrl+Shift + H", "show / hide help"),
     ("Ctrl+Shift + Esc", "quit"),

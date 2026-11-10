@@ -2,7 +2,8 @@
 # Run Life in Life as a live wallpaper over your macOS desktop picture.
 # Edit the values below, then run:  ./wall.sh
 # Stop it with Ctrl+C here, or Ctrl+Shift+Esc. Ctrl+Shift+W unpins it so the other shortcuts work.
-# Ctrl+Shift+S picks colour, speed and monitor in a small window, live (and remembers it).
+# Ctrl+Shift+S picks colour, speed, wallpaper or window (and its size) and monitor in a
+# small window, live (and remembers it).
 # To start it at every login, see login.sh.
 
 # Background darkness behind the cells: 0 = fully clear (your wallpaper shows), 1 = solid black
@@ -53,12 +54,16 @@ if [ -n "$LIFE_LOG" ] && [ -f "$LIFE_LOG" ] && [ "$(stat -f %z "$LIFE_LOG")" -gt
     rm -f "$LIFE_LOG.tmp"
 fi
 
-# Colour / speed / monitor picked with Ctrl+Shift+S (or ./login.sh) are saved in ./settings and
-# passed after the values above, so they win. ./login.sh reset (or deleting it) undoes that.
+# Colour / speed / monitor / mode / window size picked with Ctrl+Shift+S (or ./login.sh) are
+# saved in ./settings and passed after the values above, so they win (mode=window turns the
+# --wallpaper below into a window). ./login.sh reset (or deleting it) undoes that.
 SAVED=()
 if [ -f settings ]; then
     while IFS='=' read -r key value; do
-        case "$key" in color|speed|monitor) [ -n "$value" ] && SAVED+=("--$key" "$value") ;; esac
+        case "$key" in
+            color|speed|monitor|size) [ -n "$value" ] && SAVED+=("--$key" "$value") ;;
+            mode) case "$value" in wallpaper|window) SAVED+=("--$value") ;; esac ;;
+        esac
     done < settings
 fi
 

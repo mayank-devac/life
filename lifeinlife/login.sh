@@ -6,7 +6,7 @@
 #   ./login.sh status      show whether it is installed / running, and its settings
 #
 # Change it without editing wall.sh (applies right away, and at every login):
-#   Ctrl+Shift+S           while it runs: pick colour, speed and monitor in a small window (live)
+#   Ctrl+Shift+S           while it runs: pick colour, speed, wallpaper / window, size and monitor (live)
 #   ./login.sh             the same window from the terminal (same as: settings)
 #   ./login.sh color red   cell colour: multi, white, black, gray, red, orange, yellow,
 #                          green, cyan, blue, purple, pink, mauve, or a hex like ff8800,
@@ -17,7 +17,7 @@
 #   ./login.sh reset       forget those choices, use wall.sh's values again
 #
 # Everything else (opacity, zoom, ...) comes from wall.sh: edit that file, then
-# run  ./login.sh install  again. Colour/speed/monitor choices made here are kept.
+# run  ./login.sh install  again. Choices made in the settings window are kept.
 # Output and errors go to ~/Library/Logs/life-wallpaper.log
 #
 # Installed with pipx / uv tool install? Then  life --login <command>  runs this same
@@ -255,7 +255,7 @@ set_speed() {
     echo "Speed set to $1/s (running now, and at every login)."
 }
 
-# The same colour / speed / monitor window as Ctrl+Shift+S (the dialog lives in lifeinlife/settings.py).
+# The same settings window as Ctrl+Shift+S (the dialog lives in lifeinlife/settings.py).
 # Going through wall.sh means the dialog starts from the values in use right now.
 gui() {
     need_install
@@ -289,7 +289,7 @@ reset_settings() {
     need_install
     rm -f "$SETTINGS"
     restart
-    echo "Cleared: colour, speed and monitor come from wall.sh again."
+    echo "Cleared: colour, speed, mode, size and monitor come from wall.sh again."
 }
 
 uninstall() {

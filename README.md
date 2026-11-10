@@ -29,7 +29,7 @@ life --wallpaper          # live wallpaper, just this once (macOS)
 life --help               # every option
 
 life --login status       # is it installed / running?
-life --login              # settings window: colour, speed, monitor
+life --login              # settings window: colour, speed, wallpaper/window, size, monitor
 life --login color mauve  # or set them directly: speed 4, monitor 2
 life --login monitors     # list monitors and their numbers
 life --login reset        # forget colour / speed / monitor choices
@@ -64,10 +64,14 @@ Edit the settings at the top of `wall.sh` (opacity, colour, monitor, zoom…), t
 Python environment, because macOS won't let login items read Downloads, Desktop or Documents.
 After editing `wall.sh`, run `./login.sh install` again to apply it. Logs: `~/Library/Logs/life-wallpaper.log`.
 
-### Change colour or monitor (no need to edit `wall.sh`)
+### Change colour, mode, size or monitor (no need to edit `wall.sh`)
 
-Press **`Ctrl+Shift + S`** while it's running (pinned or not): a small window asks for a
-colour, then a monitor, and the wallpaper changes on the spot. From the terminal:
+Press **`Ctrl+Shift + S`** while it's running (pinned or not, wallpaper or window): a small
+window asks for a colour, a speed, **wallpaper or window**, the window's size (for a window),
+then a monitor, and it changes on the spot. Switching to *Window* turns the wallpaper into a
+normal movable window; switching to *Wallpaper* makes a window fill its monitor behind your
+icons. The mode and size are remembered too: a plain `life` starts in the mode you last
+picked (`life --window` / `life --wallpaper` override it). From the terminal:
 
 ```sh
 ./login.sh                # the same window
@@ -101,7 +105,7 @@ If it isn't installed yet, these install it first.
 | `Ctrl+Shift + E` | edges: wrap around / dead |
 | `Ctrl+Shift + K` | next colour theme |
 | `Ctrl+Shift + F` | effects: trails, age glow, flashes |
-| `Ctrl+Shift + S` | settings: colour, speed and monitor |
+| `Ctrl+Shift + S` | settings: colour, speed, wallpaper or window (and its size), monitor |
 | **`Ctrl+Shift + W`** | **pin to desktop (wallpaper) / unpin** |
 | `Ctrl+Shift + Up / Down` | opacity |
 | `Ctrl+Shift + H` | help |
