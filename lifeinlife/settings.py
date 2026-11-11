@@ -4,6 +4,7 @@
 The file sits next to wall.sh as plain `key=value` lines (color=red, speed=4, monitor=2,
 mode=window, size=600). wall.sh passes them on as --color / --speed / --monitor / --window
 or --wallpaper / --size, after its own values, so they win.
+hover=on starts with an empty world and brings cells to life wherever the mouse moves.
 It also keeps where the control panel was dragged on each monitor (hud=ARZOPA@20,20;LG@40,120),
 which only the app reads."""
 import argparse
@@ -48,7 +49,7 @@ def live_pid(path):
         if "life" not in out:
             return None
     return pid
-KEYS = ("color", "speed", "monitor", "mode", "size", "hud")
+KEYS = ("color", "speed", "monitor", "mode", "size", "hover", "hud")
 WALLPAPER, WINDOW = "wallpaper", "window"   # the two modes (saved as mode=...)
 MODE_LABELS = {WALLPAPER: "Wallpaper  (fills the monitor, behind your icons)",
                WINDOW: "Window  (a square you can move, draw in and resize)"}
@@ -56,6 +57,8 @@ MIN_SIZE = 200  # smallest window, in points
 CUSTOM = "Custom hex colour…"
 CUSTOM_SIZE = "Custom size…"
 TITLE = "Life wallpaper"
+# The tick box under the wallpaper / window list (no commas: it travels in the flags argument).
+HOVER_LABEL = "Mouse hover: bring cells to life"
 
 
 def load(path=SETTINGS_FILE):
@@ -107,17 +110,19 @@ def hud_text(spots):
 # `activate` brings the dialogs to the front: they're opened from a background app.
 # The list window is our own (JavaScript for Automation + AppKit), because `choose from list`
 # only allows two buttons. argv: prompt, default, flags ("first" greys out Back, "last" drops
-# Next), swatches (JSON {option: ["#rrggbb", ...]}, "{}" for none), options... With swatches,
+# Next, "check:<title>" adds a tick box under the list, ticked with "checked"), swatches (JSON {option: ["#rrggbb", ...]}, "{}" for none), options... With swatches,
 # each option gets a little gradient beside it and a cell-grid preview of the selected one
 # sits above the list. An option "value\tshown" shows only the part after the tab (and prints
 # the whole thing); "#\tTitle" is a section heading, which can't be picked. Save is on the left, Back and Next on the right; cancelling is the title
 # bar's close button (or Esc). Prints "next\n<option>", "save\n<option>" or "back\n<option>",
-# nothing if cancelled. Return = Next (Save in the last window), double-click = Return.
+# nothing if cancelled; with a tick box, a third line "1" (ticked) or "0". Return = Next (Save in the last window), double-click = Return.
 _PICK = r"""ObjC.import('Cocoa');
 function run(argv) {
     var prompt = argv[0], def = argv[1], flags = argv[2].split(','), opts = argv.slice(4);
     var swatches = JSON.parse(argv[3] || '{}'), hasSwatches = Object.keys(swatches).length > 0;
     var first = flags.indexOf('first') >= 0, hasNext = flags.indexOf('last') < 0;
+    var checkTitle = null, check = null;
+    flags.forEach(function (f) { if (f.indexOf('check:') === 0) checkTitle = f.slice(6); });
     var app = $.NSApplication.sharedApplication;
     app.setActivationPolicy(1);
     function nsColor(hex) {
@@ -176,7 +181,8 @@ function run(argv) {
         }
     });
     var me = $.LifePicker.alloc.init;
-    var W = 380, H = hasSwatches ? 396 : 360, top = hasSwatches ? 36 : 0;
+    var bottom = checkTitle === null ? 60 : 90;  // room for the tick box above the buttons
+    var W = 380, H = (hasSwatches ? 396 : 360) + bottom - 60, top = hasSwatches ? 36 : 0;
     var win = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, W, H), 3, 2, false);  // titled + close button
     win.delegate = me;
     win.title = '%s';
@@ -189,7 +195,7 @@ function run(argv) {
         preview.imageScaling = 1;  // fill the frame: drawn at this size, so the grid lines stay crisp
         view.addSubview(preview);
     }
-    var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, 60, W - 40, H - 104 - top));
+    var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, bottom, W - 40, H - 44 - bottom - top));
     scroll.hasVerticalScroller = true;
     scroll.borderType = 2;
     var table = $.NSTableView.alloc.initWithFrame($.NSMakeRect(0, 0, W - 44, 100));
@@ -209,6 +215,12 @@ function run(argv) {
     table.doubleAction = 'doubleClicked:';
     scroll.documentView = table;
     view.addSubview(scroll);
+    if (checkTitle !== null) {
+        check = $.NSButton.checkboxWithTitleTargetAction(checkTitle, $(), null);
+        check.frame = $.NSMakeRect(18, 58, W - 36, 22);
+        check.state = flags.indexOf('checked') >= 0 ? 1 : 0;
+        view.addSubview(check);
+    }
     function button(title, tag, x, key) {
         var b = $.NSButton.buttonWithTitleTargetAction(title, me, 'clicked:');
         b.tag = tag;
@@ -235,7 +247,8 @@ function run(argv) {
     var row = table.selectedRow;
     win.orderOut(null);
     if (r === 3 || row < 0 || heading(row)) return '';
-    return ({1: 'next', 2: 'save', 4: 'back'})[r] + '\n' + opts[row];
+    var ticked = check === null ? '' : '\n' + (Number(check.state) === 1 ? '1' : '0');
+    return ({1: 'next', 2: 'save', 4: 'back'})[r] + '\n' + opts[row] + ticked;
 }""" % TITLE
 NEXT, SAVE, BACK = "next", "save", "back"
 
@@ -264,17 +277,27 @@ def _osascript(script, *args, lang="AppleScript"):
     return out.stdout.strip()
 
 
-def _pick(prompt, default, options, first=False, last=False, swatches=None):
+def _pick(prompt, default, options, first=False, last=False, swatches=None, check=None):
     """Show the list window: Save on the left, Back and Next on the right (Back greyed out
     when `first`, no Next when `last`). `swatches` ({option: ["#rrggbb", ...]}) adds a colour
-    preview: a little gradient by each option and a bigger one of the selected. Returns (NEXT, SAVE or BACK, chosen option), or
-    (None, None) if cancelled / not on macOS."""
-    flags = ",".join(f for f, on in (("first", first), ("last", last)) if on)
-    button, _, value = _osascript(_PICK, prompt, default, flags, json.dumps(swatches or {}),
-                                  *options, lang="JavaScript").partition("\n")
+    preview: a little gradient by each option and a bigger one of the selected.
+    `check` = (title, ticked) adds a tick box under the list.
+    Returns (NEXT, SAVE or BACK, chosen option), or (None, None) if cancelled / not on macOS;
+    with `check`, a third item: whether it was left ticked (None if that's unknown)."""
+    flags = [f for f, on in (("first", first), ("last", last)) if on]
+    if check is not None:
+        flags.append(f"check:{check[0].replace(',', ' ')}")
+        if check[1]:
+            flags.append("checked")
+    out = _osascript(_PICK, prompt, default, ",".join(flags), json.dumps(swatches or {}),
+                     *options, lang="JavaScript")
+    button, _, rest = out.partition("\n")
+    value, _, ticked = rest.partition("\n")
     if button not in (NEXT, SAVE, BACK) or not value:
-        return None, None
-    return button, value
+        return (None, None) if check is None else (None, None, None)
+    if check is None:
+        return button, value
+    return button, value, {"1": True, "0": False}.get(ticked.strip())
 
 
 def monitor_labels():
@@ -347,16 +370,17 @@ def place_options(monitors, monitor):
     return rows
 
 
-def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None):
+def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None, hover=False):
     """Ask for a colour, a speed, wallpaper or window and on which monitor (one window), then
-    the window's size (only for a window).
+    the window's size (only for a window). The wallpaper / window window also has the
+    hover tick box (`hover`: whether it's on now).
     Each window has Next (go on to the next one), Save (stop here, keeping the current
     values of the later windows) and Back (what you picked in it is kept); closing it cancels.
     `color` is the current colour's text ("multi", "heat", "red", "#ff8800"), `speed` the
     outer generations per second, `monitor` its number, `mode` WALLPAPER or WINDOW, `size`
     the window's size in points. `progress(text)`, if given, is told about the pause before
     the wallpaper / window window (finding the monitors).
-    Returns {"color", "speed", "monitor", "mode", "size"}, or None if cancelled."""
+    Returns {"color", "speed", "monitor", "mode", "size", "hover"}, or None if cancelled."""
     progress = progress or (lambda _text: None)
     names = ["multi", *THEMES, *NAMED_COLORS]
     speed_labels = [speed_label(v) for v in sorted({*SPEEDS, float(speed)})]
@@ -365,7 +389,7 @@ def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None):
     now = {"color": color, "speed": speed_label(speed), "mode": mode, "size": size_label(size),
            "monitor": monitor}
     picked = {"color": color, "speed": float(speed), "monitor": monitor, "mode": mode,
-              "size": int(size)}
+              "size": int(size), "hover": bool(hover)}
     places = None  # loaded on the way to that window (finding the monitors takes a moment)
 
     def wanted(step):
@@ -408,8 +432,11 @@ def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None):
                             if m == picked["mode"] and n == picked["monitor"]),
                            next(opt for opt, m, _n in places if m == picked["mode"]))
             where = f"{now['mode']} on monitor {now['monitor']}" if several else now["mode"]
-            button, value = _pick(f"Show it as{', and where' if several else ''} (now: {where}):",
-                                  current, [opt for opt, _m, _n in places])
+            button, value, ticked = _pick(
+                f"Show it as{', and where' if several else ''} (now: {where}):",
+                current, [opt for opt, _m, _n in places], check=(HOVER_LABEL, picked["hover"]))
+            if ticked is not None:
+                picked["hover"] = ticked
             place = next((p for p in places if p[0] == value and p[1] is not None), None)
             if place:
                 _opt, picked["mode"], picked["monitor"] = place

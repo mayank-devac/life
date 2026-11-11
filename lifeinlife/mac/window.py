@@ -101,6 +101,17 @@ class MacWindow:
     def frame(self):
         return self.win.frame()
 
+    def mouse_at(self):
+        """Where the mouse is, in points from the window's top-left corner, or None when
+        it's outside the window. Asks macOS directly, so it works while pinned too (a
+        pinned window gets no mouse events). Needs no permission."""
+        p = self.AppKit.NSEvent.mouseLocation()  # screen points, from the bottom left
+        f = self.win.frame()
+        x, y = p.x - f.origin.x, f.origin.y + f.size.height - p.y
+        if 0 <= x < f.size.width and 0 <= y < f.size.height:
+            return x, y
+        return None
+
     def set_frame(self, frame):
         """Move/resize the window to `frame` (an NSRect in points). SDL notices and sends
         a WINDOWSIZECHANGED event, which is where the app picks up the new size."""

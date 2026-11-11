@@ -265,6 +265,14 @@ class WorldBehaviour(unittest.TestCase):
         self.assertTrue(settled)
         self.assertGreater(int(w.macro.sum()), 0)
 
+    def test_hover_mode_world_is_not_reseeded(self):
+        w = World(16)
+        w.reseed_when_settled = False
+        w.macro[:] = 0
+        for _ in range((STALE_STEPS + 1) * MACRO_EVERY):
+            self.assertFalse(w.step())
+        self.assertEqual(int(w.macro.sum()), 0)
+
     def test_long_period_oscillator_counts_as_settled(self):
         # A pulsar (period 3) next to a blinker (period 2): the world repeats every 6.
         w = empty_world(24)

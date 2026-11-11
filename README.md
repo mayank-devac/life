@@ -95,7 +95,12 @@ Press **`Ctrl+Shift + S`** while it's running (pinned or not, wallpaper or windo
 then the window's size (for a window; *Custom size…* lets you type any size), and it changes on the spot. Switching to *Window* turns the wallpaper into a
 normal movable window; switching to *Wallpaper* makes a window fill its monitor behind your
 icons. The mode and size are remembered too: a plain `life` starts in the mode you last
-picked (`life --window` / `life --wallpaper` override it). From the terminal:
+picked (`life --window` / `life --wallpaper` override it).
+
+Under that list is a **Hover** tick box. Ticked, the world empties and cells come to life
+wherever you move the mouse over it, pinned or not, wallpaper or window (a settled world is
+left as it is instead of being replaced by a random one). It's remembered like the rest;
+`life --hover` / `life --no-hover` override it. From the terminal:
 
 ```sh
 ./login.sh                # the same window

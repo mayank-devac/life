@@ -26,7 +26,7 @@ from pygame._sdl2.video import Renderer
 
 from . import patterns, settings
 from .colors import THEMES, parse_color
-from .config import (CLEAR_BG, CLICKABLE_BG, HIDDEN_WAIT, MAX_WAIT, MONITOR_GRACE, PINNED_WAIT,
+from .config import (CLEAR_BG, CLICKABLE_BG, HIDDEN_WAIT, HOVER_IDLE, MAX_WAIT, MONITOR_GRACE, PINNED_WAIT,
                      SAVE_DIR, SCREEN_POLL, SOLID_BG, SPEEDS, SYSTEM_POLL)
 from .render import Painter
 from .rules import next_preset, parse_rule
@@ -119,6 +119,8 @@ class LifeInLife:
         self.brush = 0         # index into BRUSH_NAMES (Ctrl+Shift+P)
         self.turns = 0         # quarter turns clockwise (Ctrl+Shift+T)
         self.hovered = False
+        self.hover = False       # hover mode: cells come to life wherever the mouse moves
+        self.hover_last = None   # the cell the mouse was last over (hover mode), or None
         self.pending = []      # actions coming from the global hotkeys and the panel
 
         self.hidden = None     # why nobody can see the window, or None
@@ -160,6 +162,8 @@ class LifeInLife:
             self._remember_home()  # from now on, stay on that monitor
         if sys.platform == "darwin" and self._get_mac() is not None:
             self._show_hud()  # pinned or not: it has the pin / unpin button
+        if args.hover:
+            self.set_hover(True, clear=not args.load)
         if args.load:
             if not self.load_file(args.load):
                 pygame.quit()
@@ -416,7 +420,7 @@ class LifeInLife:
         until it's answered) so the wallpaper keeps going meanwhile."""
         if self.dialog is not None and self.dialog.is_alive():
             return  # already open
-        color, monitor, speed = self.color_name, self.monitor, self.speed
+        color, monitor, speed, hover = self.color_name, self.monitor, self.speed, self.hover
         mode = settings.WALLPAPER if self.wallpaper_mode else settings.WINDOW
         size = self.size if self.wallpaper_mode else round(self.window.size[0])
         self.toast("Opening settings…", 3)  # osascript takes a moment to show the window
@@ -431,7 +435,7 @@ class LifeInLife:
 
         def ask():
             picked = settings.choose(color, monitor, speed, mode, size,
-                                     progress=lambda text: tell("toast", text))
+                                     progress=lambda text: tell("toast", text), hover=hover)
             if picked is None:
                 tell("toast", None)  # cancelled
             else:
@@ -442,13 +446,16 @@ class LifeInLife:
 
     def apply_settings(self, picked):
         """Apply a choice from the dialog right away, and save it for the next start.
-        `picked` is settings.choose()'s {"color", "speed", "monitor", "mode", "size"}."""
+        `picked` is settings.choose()'s {"color", "speed", "monitor", "mode", "size", "hover"}."""
         color_name, monitor, size = picked["color"], picked["monitor"], picked["size"]
         self.world.set_color(parse_color(color_name))  # the dialog already checked it
         self.color_name = color_name
         if color_name not in ("multi", *THEMES):
             self.base_color = color_name
         self.set_speed(min(picked["speed"], 1 / self.dt))
+        hover = picked.get("hover", self.hover)
+        if hover != self.hover:
+            self.set_hover(hover)
         self.monitor = monitor
         self.size = size
         mode = picked["mode"]
@@ -485,8 +492,11 @@ class LifeInLife:
         self.painter.invalidate()
         try:
             speed_text = settings.speed_text(self.speed)
-            settings.save(color=color_name, speed=speed_text, monitor=monitor, mode=mode, size=size)
+            settings.save(color=color_name, speed=speed_text, monitor=monitor, mode=mode, size=size,
+                          hover="on" if self.hover else "off")
             shown = "wallpaper" if mode == settings.WALLPAPER else f"window {size}pt"
+            if self.hover:
+                shown += "  -  hover"
             self.toast(f"Colour {color_name}  -  {speed_text}/s  -  {shown}  -  monitor {monitor}", 2.5)
         except OSError as exc:
             self.toast(f"Applied, but couldn't save it ({exc.strerror})", 3.5)
@@ -544,13 +554,50 @@ class LifeInLife:
 
     def _paint_to(self, cell):
         """Paint (or erase) every cell on the line from the last painted one to `cell`."""
-        last = self.paint_last or cell
+        self._line(self.paint_last, cell, self.paint_alive)
+        self.paint_last = cell
+
+    def _line(self, last, cell, alive):
+        """Bring to life (or kill) every cell on the line from `last` (None: just `cell`)."""
+        last = last or cell
         n = max(abs(cell[0] - last[0]), abs(cell[1] - last[1]))
         t = np.linspace(0, 1, n + 1)
         rows = np.rint(last[0] + (cell[0] - last[0]) * t).astype(int)
         cols = np.rint(last[1] + (cell[1] - last[1]) * t).astype(int)
-        self.world.set_cells(rows, cols, self.paint_alive)
-        self.paint_last = cell
+        self.world.set_cells(rows, cols, alive)
+
+    # ---- hover mode
+    def set_hover(self, on, clear=True):
+        """Hover mode on: the world empties (unless `clear` is False) and cells come to life
+        wherever the mouse moves over the window, pinned or not; a settled world is left
+        alone instead of being replaced by a random one. Off: back to normal, with a new
+        random world if this one is empty."""
+        self.hover = on
+        self.hover_last = None
+        self.world.reseed_when_settled = not on
+        if on and clear:
+            if self.world.population:
+                self.world.checkpoint()  # step back brings the old world back
+            self.world.clear()
+            self.world.ghost[:] = 0  # no fading trails of the old world: start really empty
+        elif not on and not self.world.population:
+            self.world.reseed()
+
+    def _mouse_at(self):
+        """The mouse, in points from the window's top-left, or None outside it."""
+        if self.mac is not None:
+            return self.mac.mouse_at()  # works while pinned too
+        return self.mouse if self.hovered else None
+
+    def _hover(self):
+        """Hover mode: bring to life the cells the mouse moved over since the last look."""
+        if not self.hover:
+            return
+        pos = self._mouse_at() if self.drag_mode is None else None
+        cell = None if pos is None else self.view.cell_at(pos[0] * self.dpr, pos[1] * self.dpr)
+        if cell is not None and cell != self.hover_last:
+            self._line(self.hover_last, cell, True)
+        self.hover_last = cell
 
     def save_world(self):
         """Save the whole world as .rle in SAVE_DIR (the grid's full size, so loading it
@@ -921,6 +968,8 @@ class LifeInLife:
             else:
                 due = self.next_tick + self.world.frames_to_macro_step() * self.dt
                 wait = min(wait, due - now)
+        if self.hover:  # keep looking where the mouse is: often while it's over the window
+            wait = min(wait, self.dt if self.hover_last is not None else HOVER_IDLE)
         if now < self.toast_until:
             wait = min(wait, self.toast_until - now)
         if self.show_help and self.help_until != math.inf:
@@ -985,6 +1034,7 @@ class LifeInLife:
                 self._save_hud_spots(now)
                 self._poll_system(now)
                 if not self.hidden:
+                    self._hover()
                     self._advance(now)
                     self.draw()
                 if self.running:

@@ -84,6 +84,7 @@ class World:
         self.rule, self.inner_rule, self.wrap = rule, inner_rule, wrap
         self.macro_every = max(1, int(macro_every))
         self.effects = effects  # fading trails, age brightness, birth flashes
+        self.reseed_when_settled = True  # False (hover mode): a settled world is left as it is
         self.tick = 0
         self.generation = 0
         self._rgba, self._rgba_gen = None, None
@@ -354,7 +355,7 @@ class World:
         key = hash(new.tobytes())
         self.stale = self.stale + 1 if (not new.any() or key in self.history) else 0
         self.history = (self.history + [key])[-HISTORY:]
-        if self.stale >= STALE_STEPS:
+        if self.stale >= STALE_STEPS and self.reseed_when_settled:
             self.reseed()
             return True
         return False

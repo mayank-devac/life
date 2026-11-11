@@ -181,6 +181,30 @@ class SettingsDialog(unittest.TestCase):
         self.assertEqual(self.run_choose(*to_size, custom, "50", "", custom, "300"),
                          ("red", 2.0, 2, "window", 300))
 
+    def test_hover_tick_box(self):
+        to_place = ("next\nred", self.SPEED2)
+        self.run_choose(*to_place, "save\n" + self.WALL_B + "\n1")
+        self.assertIn("check:" + settings.HOVER_LABEL, self.prompts[2][2].split(","))
+        self.assertNotIn("checked", self.prompts[2][2].split(","))  # off now: not ticked
+
+    def test_hover_ticked_and_unticked(self):
+        def hover(*answers, now=False):
+            replies, flags = iter(answers), []
+
+            def fake(_script, *args, **_k):
+                flags.append(args[2])
+                return next(replies)
+            with mock.patch.object(settings, "_osascript", fake), \
+                 mock.patch.object(settings, "monitor_labels", lambda: ["1: A", "2: B"]):
+                picked = settings.choose("red", 1, 4.0, settings.WALLPAPER, 800, hover=now)
+            return picked["hover"], flags
+        self.assertEqual(hover("next\nred", self.SPEED2, "save\n" + self.WALL_B + "\n1")[0], True)
+        on, flags = hover("next\nred", self.SPEED2, "save\n" + self.WALL_B + "\n0", now=True)
+        self.assertFalse(on)
+        self.assertIn("checked", flags[2].split(","))  # on now: shown ticked
+        # Saved before reaching that window: unchanged.
+        self.assertEqual(hover("save\nred", now=True)[0], True)
+
     def test_cancel(self):
         self.assertIsNone(self.run_choose("next\nred", ""))
         self.assertIsNone(self.run_choose(""))

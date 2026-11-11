@@ -44,6 +44,8 @@ def saved_defaults():
             defaults["size"] = settings.parse_size(saved["size"])
         except ValueError:
             pass
+    if saved.get("hover") in ("on", "off"):
+        defaults["hover"] = saved["hover"] == "on"
     return defaults
 
 
@@ -60,6 +62,9 @@ def parse_args(argv=None):
                    help="which monitor to use, 1 = primary (default), 2 = second, ... "
                         "(see --list-monitors). --wallpaper covers it; otherwise the window "
                         "opens in its middle")
+    p.add_argument("--hover", action=argparse.BooleanOptionalAction, default=False,
+                   help="start with an empty world and bring cells to life wherever the mouse "
+                        "moves over it, pinned or not (--no-hover: off, the default)")
     p.add_argument("--list-monitors", action="store_true",
                    help="print the connected monitors and their numbers, then exit")
     p.add_argument("--solid", action="store_true",
@@ -369,17 +374,18 @@ def main(argv=None):
         from . import settings  # noqa: PLC0415
         print("Opening settings…", flush=True)
         picked = settings.choose(args.color_name, args.monitor, args.speed, args.mode, args.size,
-                                 progress=lambda text: print(text, flush=True))
+                                 progress=lambda text: print(text, flush=True), hover=args.hover)
         if picked is None:
             print("Cancelled.")
             raise SystemExit(1)
         print("Saving…", flush=True)
         speed = settings.speed_text(picked["speed"])
         settings.save(color=picked["color"], speed=speed, monitor=picked["monitor"],
-                      mode=picked["mode"], size=picked["size"])
+                      mode=picked["mode"], size=picked["size"],
+                      hover="on" if picked["hover"] else "off")
         print(f"Saved: colour {picked['color']}, speed {speed}/s, {picked['mode']}"
               + (f" {picked['size']}pt" if picked["mode"] == settings.WINDOW else "")
-              + f", monitor {picked['monitor']}")
+              + f", monitor {picked['monitor']}" + (", hover on" if picked["hover"] else ""))
         return
     if args.stop:
         raise SystemExit(0 if stop_detached() else 1)

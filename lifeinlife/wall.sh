@@ -55,7 +55,7 @@ if [ -n "$LIFE_LOG" ] && [ -f "$LIFE_LOG" ] && [ "$(stat -f %z "$LIFE_LOG")" -gt
     rm -f "$LIFE_LOG.tmp"
 fi
 
-# Colour / speed / monitor / mode / window size picked with Ctrl+Shift+S (or ./login.sh) are
+# Colour / speed / monitor / mode / window size / hover picked with Ctrl+Shift+S (or ./login.sh) are
 # saved in ./settings and passed after the values above, so they win (mode=window turns the
 # --wallpaper below into a window). ./login.sh reset (or deleting it) undoes that.
 SAVED=()
@@ -64,6 +64,7 @@ if [ -f settings ]; then
         case "$key" in
             color|speed|monitor|size) [ -n "$value" ] && SAVED+=("--$key" "$value") ;;
             mode) case "$value" in wallpaper|window) SAVED+=("--$value") ;; esac ;;
+            hover) case "$value" in on) SAVED+=(--hover) ;; off) SAVED+=(--no-hover) ;; esac ;;
         esac
     done < settings
 fi

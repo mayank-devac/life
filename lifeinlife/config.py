@@ -33,6 +33,7 @@ SAVE_DIR = "~/life-worlds"  # where Ctrl+Shift+X saves the world as .rle
 
 # ---------------------------------------------------------------- main loop timing (seconds)
 MAX_WAIT = 0.5         # longest sleep between wake-ups, so Ctrl+C / SIGTERM stay responsive
+HOVER_IDLE = 0.1       # hover mode, mouse outside the window: how often to look for it
 PINNED_WAIT = 0.25     # pinned: sleep slices, so global hotkeys answer within this long
 HIDDEN_WAIT = 1.0      # how often to check again while nobody can see the window
 SYSTEM_POLL = 1.0      # how often to check visibility (screen locked, display asleep)
@@ -68,7 +69,7 @@ HELP = [
     ("Ctrl+Shift + K", "next colour theme"),
     ("Ctrl+Shift + F", "effects: trails, age glow, flashes"),
     ("Ctrl+Shift + Up / Down", "opacity"),
-    ("Ctrl+Shift + S", "settings: colour, speed, wallpaper / window, size, monitor"),
+    ("Ctrl+Shift + S", "settings: colour, speed, wallpaper / window, hover, size, monitor"),
     ("Ctrl+Shift + W", "pin to desktop (wallpaper) / unpin"),
     ("Ctrl+Shift + H", "show / hide help"),
     ("Ctrl+Shift + Esc", "quit"),
