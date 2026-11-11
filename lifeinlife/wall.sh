@@ -19,7 +19,9 @@ OPACITY=1
 ZOOM=1
 
 # World size: how many cells across. Fewer = bigger cells and bigger patterns.
-GRID=144
+# Empty = cells about the size of your mouse pointer (follows the Pointer size setting in
+# System Settings > Accessibility > Display).
+GRID=
 
 # Frames per second: how smooth zooming and the inner worlds are.
 FPS=30
@@ -71,6 +73,7 @@ fi
 
 EXTRA=()
 [ "$EFFECTS" = 0 ] && EXTRA+=(--no-effects)
+[ -n "$GRID" ] && EXTRA+=(--grid "$GRID")
 
 # Run the code next to this file if it's here (a clone, or login.sh's copy); otherwise the
 # installed `life` command (pipx / uv tool install), or $LIFE_BIN, which login.sh sets.
@@ -88,7 +91,6 @@ exec "${RUN[@]}" --wallpaper \
     --bg-opacity "$BG_OPACITY" \
     --opacity "$OPACITY" \
     --zoom "$ZOOM" \
-    --grid "$GRID" \
     --fps "$FPS" \
     --speed "$SPEED" \
     --rule "$RULE" \

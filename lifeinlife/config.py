@@ -1,8 +1,10 @@
 """Tunable constants. Nothing here imports pygame, so tests can use it freely."""
 
 # ---------------------------------------------------------------- world
-DEFAULT_GRID = 96      # outer grid is GRID x GRID (overridable with --grid)
 MIN_GRID = 8
+POINTER_PT = 18        # height of the macOS arrow pointer at normal size, in points; without
+                       # --grid, cells are made about this big (times the pointer size setting)
+MAX_POINTER_GRID = 144  # ... but never more cells across than this (CPU), so huge screens get bigger cells
 MICRO_SIZE = 16        # inner grid inside every outer cell (each cell has its own)
 MACRO_EVERY = 15       # outer grid steps once every N frames (default: --speed 2 at 30 fps)
 DEFAULT_SPEED = 15.0    # outer generations per second

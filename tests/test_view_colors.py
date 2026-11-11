@@ -11,7 +11,8 @@ import numpy as np
 from lifeinlife.cli import parse_args
 from lifeinlife import settings
 from lifeinlife.colors import THEMES, hue_to_rgb, parse_color, preview_stops, theme_to_rgb
-from lifeinlife.config import MAX_ZOOM, MIN_GRID
+from lifeinlife.config import MAX_POINTER_GRID, MAX_ZOOM, MIN_GRID, POINTER_PT
+from lifeinlife.pointer import pointer_grid, pointer_scale
 from lifeinlife.rules import PRESETS
 from lifeinlife.view import View
 
@@ -53,6 +54,34 @@ class ParseColor(unittest.TestCase):
 class Args(unittest.TestCase):
     def test_grid_has_a_minimum(self):
         self.assertEqual(parse_args(["--grid", "2"]).grid, MIN_GRID)
+
+    def test_no_grid_means_pointer_sized(self):
+        self.assertIsNone(parse_args([]).grid)  # the app picks it from the pointer size
+
+
+class PointerCells(unittest.TestCase):
+    def test_grid_follows_pointer_size(self):
+        self.assertEqual(pointer_grid(900, 1.0), 900 // POINTER_PT)   # 50 cells, 18pt each
+        self.assertEqual(pointer_grid(900, 2.0), 25)                   # bigger pointer, fewer cells
+        self.assertEqual(pointer_grid(100, 4.0), MIN_GRID)             # never below the minimum
+        self.assertEqual(pointer_grid(10000, 1.0), MAX_POINTER_GRID)   # nor above the cap
+
+    def test_reads_the_macos_setting(self):
+        def run(out, live=None):
+            done = mock.Mock(stdout=out)
+            with mock.patch("lifeinlife.pointer.subprocess.run", return_value=done), \
+                    mock.patch("lifeinlife.pointer._live_scale", return_value=live):
+                return pointer_scale()
+        self.assertEqual(run("1.507943628533569\n"), 1.507943628533569)
+        self.assertEqual(run("1.5\n", live=3.0), 1.5)  # the saved setting wins
+        self.assertEqual(run(""), 1.0)       # never changed: no value saved
+        self.assertEqual(run("99\n"), 1.0)   # out of range
+        self.assertEqual(run("", live=2.0), 2.0)      # nothing saved: the live value
+        self.assertEqual(run("99\n", live=2.0), 2.0)
+        self.assertEqual(run("", live=99.0), 1.0)     # both unusable
+        with mock.patch("lifeinlife.pointer.subprocess.run", side_effect=OSError), \
+                mock.patch("lifeinlife.pointer._live_scale", return_value=None):
+            self.assertEqual(pointer_scale(), 1.0)  # no `defaults` (not macOS)
 
     def test_rules_speed_and_edges(self):
         a = parse_args(["--rule", "highlife", "--inner-rule", "B2/S", "--speed", "4", "--edges", "dead"])

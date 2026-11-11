@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 from .colors import NAMED_COLORS, THEMES, parse_color
-from .config import DEFAULT_GRID, DEFAULT_SPEED, DETAIL_ZOOM, HELP, MAX_ZOOM, MIN_GRID, MIN_ZOOM
+from .config import DEFAULT_SPEED, DETAIL_ZOOM, HELP, MAX_ZOOM, MIN_GRID, MIN_ZOOM
 from .rules import PRESETS, parse_rule
 from . import settings
 from .settings import parse_speed
@@ -80,9 +80,10 @@ def parse_args(argv=None):
     p.add_argument("--zoom", type=float, default=1.0,
                    help=f"start-up scale {MIN_ZOOM:g}-{MAX_ZOOM:g}: bigger = larger cells "
                         f"(inner life shows from {DETAIL_ZOOM})")
-    p.add_argument("--grid", type=int, default=DEFAULT_GRID,
-                   help=f"cells across the world (default {DEFAULT_GRID}, min {MIN_GRID}); "
-                        f"fewer = bigger cells")
+    p.add_argument("--grid", type=int, default=None,
+                   help=f"cells across the world (min {MIN_GRID}); fewer = bigger cells. "
+                        f"Default: as many as make each cell about the size of the mouse pointer "
+                        f"(follows macOS's pointer size setting)")
     p.add_argument("--fps", type=int, default=30,
                    help="frames per second (default 30): how smooth zooming and the inner worlds are")
     p.add_argument("--speed", default=str(DEFAULT_SPEED),
@@ -124,7 +125,8 @@ def parse_args(argv=None):
     args = p.parse_args(argv)
     args.wallpaper = args.mode == settings.WALLPAPER
     args.size = max(settings.MIN_SIZE, args.size)
-    args.grid = max(MIN_GRID, args.grid)
+    if args.grid is not None:
+        args.grid = max(MIN_GRID, args.grid)  # None: pointer-sized cells (the app picks it)
     args.fps = max(1, args.fps)
     args.color_name = args.color  # the text, to show and save; args.color is the parsed value
     try:

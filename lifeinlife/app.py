@@ -28,6 +28,7 @@ from . import patterns, settings
 from .colors import THEMES, parse_color
 from .config import (CLEAR_BG, CLICKABLE_BG, HIDDEN_WAIT, HOVER_IDLE, MAX_WAIT, MONITOR_GRACE, PINNED_WAIT,
                      SAVE_DIR, SCREEN_POLL, SOLID_BG, SPEEDS, SYSTEM_POLL)
+from .pointer import pointer_grid, pointer_scale
 from .render import Painter
 from .rules import next_preset, parse_rule
 from .view import View
@@ -95,6 +96,8 @@ class LifeInLife:
         px_w, px_h = self.renderer.get_viewport().size
         self.painter = Painter(self.renderer, px_w / size[0])
         self.dt = 1 / max(1, args.fps)
+        if args.grid is None:  # no --grid: cells about the size of the mouse pointer
+            args.grid = pointer_grid(max(size), pointer_scale())
         self.world = World(args.grid, args.color, rule=args.rule, inner_rule=args.inner_rule,
                            wrap=args.edges == "wrap", effects=not args.no_effects)
         self.set_speed(args.speed)
