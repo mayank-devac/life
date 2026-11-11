@@ -146,6 +146,7 @@ class SettingsDialog(unittest.TestCase):
         self.prompts = prompts
         if picked is None:
             return None
+        self.picked = picked
         return tuple(picked[k] for k in ("color", "speed", "monitor", "mode", "size"))
 
     def test_save_on_colour_keeps_the_rest(self):
@@ -171,9 +172,33 @@ class SettingsDialog(unittest.TestCase):
         self.assertEqual(self.run_choose("next\nred", self.SPEED2, "save\n" + heading),
                          ("red", 2.0, 1, "wallpaper", 800))
 
-    def test_wallpaper_ends_after_where(self):
-        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\n" + self.WALL_B),
+    def test_wallpaper_skips_window_size_but_asks_cell_size(self):
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\n" + self.WALL_B,
+                                         "save\n-\ncell=30"),
                          ("red", 2.0, 2, "wallpaper", 800))
+        self.assertEqual(self.picked["cell"], 30)
+        prompt, _default, flags, _swatches, *options = self.prompts[3]
+        self.assertEqual(options, [])  # no list: just the slider
+        self.assertIn(f"slider:{settings.MIN_CELL}:{settings.MAX_CELL}:20", flags.split(","))
+
+    def test_cell_slider_on_the_window_size_window(self):
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\n" + self.WIN_B,
+                                         "save\n" + settings.size_label(600) + "\ncell=12"),
+                         ("red", 2.0, 2, "window", 600))
+        self.assertEqual(self.picked["cell"], 12)
+        # Back keeps the slider's value too, and shows it there next time.
+        self.run_choose("next\nred", self.SPEED2, "next\n" + self.WIN_B,
+                        "back\n" + settings.size_label(600) + "\ncell=40", "next\n" + self.WIN_B,
+                        "save\n" + settings.size_label(600))
+        self.assertEqual(self.picked["cell"], 40)
+        self.assertIn(f"slider:{settings.MIN_CELL}:{settings.MAX_CELL}:40",
+                      self.prompts[5][2].split(","))
+
+    def test_parse_cell(self):
+        self.assertEqual(settings.parse_cell("27"), 27)
+        for bad in ("", "x", str(settings.MIN_CELL - 1), str(settings.MAX_CELL + 1)):
+            with self.assertRaises(ValueError):
+                settings.parse_cell(bad)
 
     def test_window_mode_asks_for_a_size(self):
         self.assertEqual(self.run_choose("next\nred", self.SPEED2, "next\n" + self.WIN_B,
@@ -190,7 +215,8 @@ class SettingsDialog(unittest.TestCase):
         self.assertEqual(self.run_choose("next\nred", self.SPEED2, self.WIN,
                                          "next\n" + settings.size_label(1000), monitors=("1: A",)),
                          ("red", 2.0, 1, "window", 1000))
-        self.assertEqual(self.run_choose("next\nred", self.SPEED2, self.WALL, monitors=()),
+        self.assertEqual(self.run_choose("next\nred", self.SPEED2, self.WALL, "next\n-",
+                                         monitors=()),
                          ("red", 2.0, 1, "wallpaper", 800))
 
     def test_back_keeps_what_was_picked(self):

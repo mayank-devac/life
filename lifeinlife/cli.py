@@ -44,6 +44,11 @@ def saved_defaults():
             defaults["size"] = settings.parse_size(saved["size"])
         except ValueError:
             pass
+    if "cell" in saved:
+        try:
+            defaults["cell"] = settings.parse_cell(saved["cell"])
+        except ValueError:
+            pass
     if saved.get("hover") in ("on", "off"):
         defaults["hover"] = saved["hover"] == "on"
     return defaults
@@ -84,6 +89,9 @@ def parse_args(argv=None):
                    help=f"cells across the world (min {MIN_GRID}); fewer = bigger cells. "
                         f"Default: as many as make each cell about the size of the mouse pointer "
                         f"(follows macOS's pointer size setting)")
+    p.add_argument("--cell", type=settings.parse_cell, default=None,
+                   help=f"cell size in points, {settings.MIN_CELL}-{settings.MAX_CELL} (sets how "
+                        f"many cells across; --grid wins). Default: the mouse pointer's size")
     p.add_argument("--fps", type=int, default=30,
                    help="frames per second (default 30): how smooth zooming and the inner worlds are")
     p.add_argument("--speed", default=str(DEFAULT_SPEED),

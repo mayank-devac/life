@@ -49,11 +49,12 @@ def live_pid(path):
         if "life" not in out:
             return None
     return pid
-KEYS = ("color", "speed", "monitor", "mode", "size", "hover", "hud")
+KEYS = ("color", "speed", "monitor", "mode", "size", "cell", "hover", "hud")
 WALLPAPER, WINDOW = "wallpaper", "window"   # the two modes (saved as mode=...)
 MODE_LABELS = {WALLPAPER: "Wallpaper  (fills the monitor, behind your icons)",
                WINDOW: "Window  (a square you can move, draw in and resize)"}
 MIN_SIZE = 200  # smallest window, in points
+MIN_CELL, MAX_CELL = 6, 80  # the Cell size slider's range, in points
 CUSTOM = "Custom hex colour…"
 CUSTOM_SIZE = "Custom size…"
 TITLE = "Life wallpaper"
@@ -110,19 +111,26 @@ def hud_text(spots):
 # `activate` brings the dialogs to the front: they're opened from a background app.
 # The list window is our own (JavaScript for Automation + AppKit), because `choose from list`
 # only allows two buttons. argv: prompt, default, flags ("first" greys out Back, "last" drops
-# Next, "check:<title>" adds a tick box under the list, ticked with "checked"), swatches (JSON {option: ["#rrggbb", ...]}, "{}" for none), options... With swatches,
+# Next, "check:<title>" adds a tick box under the list, ticked with "checked",
+# "slider:<min>:<max>:<value>" a Cell size slider under that), swatches (JSON {option: ["#rrggbb", ...]}, "{}" for none), options... With swatches,
 # each option gets a little gradient beside it and a cell-grid preview of the selected one
 # sits above the list. An option "value\tshown" shows only the part after the tab (and prints
 # the whole thing); "#\tTitle" is a section heading, which can't be picked. Save is on the left, Back and Next on the right; cancelling is the title
 # bar's close button (or Esc). Prints "next\n<option>", "save\n<option>" or "back\n<option>",
-# nothing if cancelled; with a tick box, a third line "1" (ticked) or "0". Return = Next (Save in the last window), double-click = Return.
+# nothing if cancelled; with a tick box, a line "1" (ticked) or "0" after that, with a slider
+# a line "cell=<points>". No options at all: just the slider (the option printed is "-"). Return = Next (Save in the last window), double-click = Return.
 _PICK = r"""ObjC.import('Cocoa');
 function run(argv) {
     var prompt = argv[0], def = argv[1], flags = argv[2].split(','), opts = argv.slice(4);
     var swatches = JSON.parse(argv[3] || '{}'), hasSwatches = Object.keys(swatches).length > 0;
     var first = flags.indexOf('first') >= 0, hasNext = flags.indexOf('last') < 0;
     var checkTitle = null, check = null;
-    flags.forEach(function (f) { if (f.indexOf('check:') === 0) checkTitle = f.slice(6); });
+    var slide = null, slider = null, slideValue = null;
+    flags.forEach(function (f) {
+        if (f.indexOf('check:') === 0) checkTitle = f.slice(6);
+        if (f.indexOf('slider:') === 0) slide = f.slice(7).split(':').map(Number);  // min, max, value
+    });
+    var hasList = opts.length > 0;
     var app = $.NSApplication.sharedApplication;
     app.setActivationPolicy(1);
     function nsColor(hex) {
@@ -174,6 +182,8 @@ function run(argv) {
                 return !heading(row); }},
             'tableViewSelectionDidChange:': {types: ['void', ['id']], implementation: function (n) {
                 showPreview(n.object.selectedRow); }},
+            'slid:': {types: ['void', ['id']], implementation: function (s) {
+                slideValue.stringValue = $(Math.round(Number(s.doubleValue)) + ' pt'); }},
             'clicked:': {types: ['void', ['id']], implementation: function (b) { $.NSApp.stopModalWithCode(b.tag); }},
             'doubleClicked:': {types: ['void', ['id']], implementation: function (t) {
                 if (t.clickedRow >= 0 && !heading(t.clickedRow)) $.NSApp.stopModalWithCode(hasNext ? 1 : 2); }},
@@ -181,8 +191,10 @@ function run(argv) {
         }
     });
     var me = $.LifePicker.alloc.init;
-    var bottom = checkTitle === null ? 60 : 90;  // room for the tick box above the buttons
-    var W = 380, H = (hasSwatches ? 396 : 360) + bottom - 60, top = hasSwatches ? 36 : 0;
+    // Room above the buttons for the tick box and the slider (each a 30pt row).
+    var bottom = 60 + (checkTitle === null ? 0 : 30) + (slide === null ? 0 : 30);
+    var W = 380, top = hasSwatches ? 36 : 0;
+    var H = hasList ? (hasSwatches ? 396 : 360) + bottom - 60 : bottom + 40;
     var win = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, W, H), 3, 2, false);  // titled + close button
     win.delegate = me;
     win.title = '%s';
@@ -195,31 +207,48 @@ function run(argv) {
         preview.imageScaling = 1;  // fill the frame: drawn at this size, so the grid lines stay crisp
         view.addSubview(preview);
     }
-    var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, bottom, W - 40, H - 44 - bottom - top));
-    scroll.hasVerticalScroller = true;
-    scroll.borderType = 2;
-    var table = $.NSTableView.alloc.initWithFrame($.NSMakeRect(0, 0, W - 44, 100));
-    if (hasSwatches) {
-        var scol = $.NSTableColumn.alloc.initWithIdentifier('s');
-        scol.width = 40;
-        scol.dataCell = $.NSImageCell.alloc.init;
-        table.addTableColumn(scol);
+    var table = null;
+    if (hasList) {
+        var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, bottom, W - 40, H - 44 - bottom - top));
+        scroll.hasVerticalScroller = true;
+        scroll.borderType = 2;
+        table = $.NSTableView.alloc.initWithFrame($.NSMakeRect(0, 0, W - 44, 100));
+        if (hasSwatches) {
+            var scol = $.NSTableColumn.alloc.initWithIdentifier('s');
+            scol.width = 40;
+            scol.dataCell = $.NSImageCell.alloc.init;
+            table.addTableColumn(scol);
+        }
+        var col = $.NSTableColumn.alloc.initWithIdentifier('v');
+        col.width = hasSwatches ? W - 104 : W - 60;
+        table.addTableColumn(col);
+        table.headerView = $();
+        table.dataSource = me;
+        table.delegate = me;
+        table.target = me;
+        table.doubleAction = 'doubleClicked:';
+        scroll.documentView = table;
+        view.addSubview(scroll);
     }
-    var col = $.NSTableColumn.alloc.initWithIdentifier('v');
-    col.width = hasSwatches ? W - 104 : W - 60;
-    table.addTableColumn(col);
-    table.headerView = $();
-    table.dataSource = me;
-    table.delegate = me;
-    table.target = me;
-    table.doubleAction = 'doubleClicked:';
-    scroll.documentView = table;
-    view.addSubview(scroll);
     if (checkTitle !== null) {
         check = $.NSButton.checkboxWithTitleTargetAction(checkTitle, $(), null);
         check.frame = $.NSMakeRect(18, 58, W - 36, 22);
         check.state = flags.indexOf('checked') >= 0 ? 1 : 0;
         view.addSubview(check);
+    }
+    if (slide !== null) {
+        var y = checkTitle === null ? 58 : 88;
+        var name = $.NSTextField.labelWithString('Cell size');
+        name.frame = $.NSMakeRect(20, y + 2, 70, 18);
+        view.addSubview(name);
+        slider = $.NSSlider.sliderWithValueMinValueMaxValueTargetAction(slide[2], slide[0], slide[1], me, 'slid:');
+        slider.frame = $.NSMakeRect(92, y, W - 172, 22);
+        slider.continuous = true;
+        view.addSubview(slider);
+        slideValue = $.NSTextField.labelWithString(Math.round(slide[2]) + ' pt');
+        slideValue.frame = $.NSMakeRect(W - 72, y + 2, 52, 18);
+        slideValue.alignment = 2;  // right
+        view.addSubview(slideValue);
     }
     function button(title, tag, x, key) {
         var b = $.NSButton.buttonWithTitleTargetAction(title, me, 'clicked:');
@@ -233,22 +262,25 @@ function run(argv) {
     button('Back', 4, hasNext ? W - 192 : W - 104, '').enabled = !first;
     if (hasNext) button('Next', 1, W - 104, '\r');
     button('Cancel', 3, -200, '\u001b');  // out of sight: just for Esc
-    var i = opts.indexOf(def);
-    while (i < 0 || heading(i)) i++;  // not found: the first row that isn't a heading
-    table.reloadData;
-    table.selectRowIndexesByExtendingSelection($.NSIndexSet.indexSetWithIndex(i), false);
-    table.scrollRowToVisible(i);
-    showPreview(i);
-    win.initialFirstResponder = table;
+    if (hasList) {
+        var i = opts.indexOf(def);
+        while (i < 0 || heading(i)) i++;  // not found: the first row that isn't a heading
+        table.reloadData;
+        table.selectRowIndexesByExtendingSelection($.NSIndexSet.indexSetWithIndex(i), false);
+        table.scrollRowToVisible(i);
+        showPreview(i);
+    }
+    win.initialFirstResponder = hasList ? table : slider;
     win.center;
     app.activateIgnoringOtherApps(true);
     win.makeKeyAndOrderFront(null);
     var r = Number(app.runModalForWindow(win));
-    var row = table.selectedRow;
+    var row = hasList ? Number(table.selectedRow) : -1;
     win.orderOut(null);
-    if (r === 3 || row < 0 || heading(row)) return '';
+    if (r === 3 || (hasList && (row < 0 || heading(row)))) return '';
     var ticked = check === null ? '' : '\n' + (Number(check.state) === 1 ? '1' : '0');
-    return ({1: 'next', 2: 'save', 4: 'back'})[r] + '\n' + opts[row] + ticked;
+    var cell = slider === null ? '' : '\ncell=' + Math.round(Number(slider.doubleValue));
+    return ({1: 'next', 2: 'save', 4: 'back'})[r] + '\n' + (hasList ? opts[row] : '-') + ticked + cell;
 }""" % TITLE
 NEXT, SAVE, BACK = "next", "save", "back"
 
@@ -277,27 +309,39 @@ def _osascript(script, *args, lang="AppleScript"):
     return out.stdout.strip()
 
 
-def _pick(prompt, default, options, first=False, last=False, swatches=None, check=None):
+def _pick(prompt, default, options, first=False, last=False, swatches=None, check=None,
+          slider=None):
     """Show the list window: Save on the left, Back and Next on the right (Back greyed out
     when `first`, no Next when `last`). `swatches` ({option: ["#rrggbb", ...]}) adds a colour
     preview: a little gradient by each option and a bigger one of the selected.
-    `check` = (title, ticked) adds a tick box under the list.
+    `check` = (title, ticked) adds a tick box under the list; `slider` = (min, max, value)
+    a Cell size slider (in points) under that. No `options`: just the slider.
     Returns (NEXT, SAVE or BACK, chosen option), or (None, None) if cancelled / not on macOS;
-    with `check`, a third item: whether it was left ticked (None if that's unknown)."""
+    with `check`, then whether it was left ticked (None if that's unknown); with `slider`,
+    then the cell size it was left at (None if unknown)."""
     flags = [f for f, on in (("first", first), ("last", last)) if on]
     if check is not None:
         flags.append(f"check:{check[0].replace(',', ' ')}")
         if check[1]:
             flags.append("checked")
+    if slider is not None:
+        flags.append("slider:" + ":".join(str(int(v)) for v in slider))
     out = _osascript(_PICK, prompt, default, ",".join(flags), json.dumps(swatches or {}),
                      *options, lang="JavaScript")
-    button, _, rest = out.partition("\n")
-    value, _, ticked = rest.partition("\n")
-    if button not in (NEXT, SAVE, BACK) or not value:
-        return (None, None) if check is None else (None, None, None)
-    if check is None:
-        return button, value
-    return button, value, {"1": True, "0": False}.get(ticked.strip())
+    lines = out.split("\n")
+    button, value, extra = lines[0], (lines[1] if len(lines) > 1 else ""), lines[2:]
+    cancelled = button not in (NEXT, SAVE, BACK) or not value
+    result = [None, None] if cancelled else [button, value]
+    if check is not None:
+        ticks = [e.strip() for e in extra if e.strip() in ("0", "1")]
+        result.append(None if cancelled or not ticks else ticks[0] == "1")
+    if slider is not None:
+        cells = [e.strip()[5:] for e in extra if e.strip().startswith("cell=")]
+        try:
+            result.append(None if cancelled or not cells else parse_cell(cells[0]))
+        except ValueError:
+            result.append(None)
+    return tuple(result)
 
 
 def monitor_labels():
@@ -355,6 +399,17 @@ STEPS = ("color", "speed", "place", "size")
 HEADING = "#"  # place_options(): a section heading row, not something to pick
 
 
+def parse_cell(text):
+    """"27" -> cell size in points, MIN_CELL to MAX_CELL. ValueError otherwise."""
+    try:
+        value = int(float(str(text).split()[0]))
+    except (ValueError, IndexError):
+        value = 0
+    if not MIN_CELL <= value <= MAX_CELL:
+        raise ValueError(f"cell size must be {MIN_CELL}-{MAX_CELL} points, not {text!r}")
+    return value
+
+
 def place_options(monitors, monitor):
     """The one window that asks wallpaper or window, and on which monitor: [(option, mode,
     monitor number)]. With 2+ monitors, a section per mode (a heading row, mode None) listing
@@ -370,17 +425,19 @@ def place_options(monitors, monitor):
     return rows
 
 
-def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None, hover=False):
+def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None, hover=False,
+           cell=20):
     """Ask for a colour, a speed, wallpaper or window and on which monitor (one window), then
-    the window's size (only for a window). The wallpaper / window window also has the
-    hover tick box (`hover`: whether it's on now).
+    the window's size and the cell size (a slider; for a wallpaper, the slider alone). The
+    wallpaper / window window also has the hover tick box (`hover`: whether it's on now).
+    `cell` is the cells' size now, in points.
     Each window has Next (go on to the next one), Save (stop here, keeping the current
     values of the later windows) and Back (what you picked in it is kept); closing it cancels.
     `color` is the current colour's text ("multi", "heat", "red", "#ff8800"), `speed` the
     outer generations per second, `monitor` its number, `mode` WALLPAPER or WINDOW, `size`
     the window's size in points. `progress(text)`, if given, is told about the pause before
     the wallpaper / window window (finding the monitors).
-    Returns {"color", "speed", "monitor", "mode", "size", "hover"}, or None if cancelled."""
+    Returns {"color", "speed", "monitor", "mode", "size", "hover", "cell"}, or None if cancelled."""
     progress = progress or (lambda _text: None)
     names = ["multi", *THEMES, *NAMED_COLORS]
     speed_labels = [speed_label(v) for v in sorted({*SPEEDS, float(speed)})]
@@ -389,11 +446,9 @@ def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None, hover
     now = {"color": color, "speed": speed_label(speed), "mode": mode, "size": size_label(size),
            "monitor": monitor}
     picked = {"color": color, "speed": float(speed), "monitor": monitor, "mode": mode,
-              "size": int(size), "hover": bool(hover)}
+              "size": int(size), "hover": bool(hover),
+              "cell": max(MIN_CELL, min(MAX_CELL, round(cell)))}
     places = None  # loaded on the way to that window (finding the monitors takes a moment)
-
-    def wanted(step):
-        return step != "size" or picked["mode"] == WINDOW
 
     i = 0
     while True:
@@ -440,9 +495,17 @@ def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None, hover
             place = next((p for p in places if p[0] == value and p[1] is not None), None)
             if place:
                 _opt, picked["mode"], picked["monitor"] = place
+        elif picked["mode"] == WALLPAPER:  # no window size: just the cell size
+            button, value, cell = _pick("Cell size (bigger = fewer cells):", "", [], last=True,
+                                        slider=(MIN_CELL, MAX_CELL, picked["cell"]))
+            if cell is not None:
+                picked["cell"] = cell
         else:
-            button, value = _pick(f"Window size (now: {now['size']}):", size_label(picked["size"]),
-                                  [*size_labels, CUSTOM_SIZE], last=True)
+            button, value, cell = _pick(f"Window size (now: {now['size']}):",
+                                        size_label(picked["size"]), [*size_labels, CUSTOM_SIZE],
+                                        last=True, slider=(MIN_CELL, MAX_CELL, picked["cell"]))
+            if cell is not None:
+                picked["cell"] = cell
             if value == CUSTOM_SIZE and button in (NEXT, SAVE):
                 value = _osascript(_ASK, f"Window size in points (at least {MIN_SIZE}), like 900:",
                                    str(picked["size"]))
@@ -464,8 +527,6 @@ def choose(color, monitor, speed=15, mode=WINDOW, size=800, progress=None, hover
             return picked
         move = -1 if button == BACK else 1
         i += move
-        while 0 <= i < len(STEPS) and not wanted(STEPS[i]):
-            i += move
         if i >= len(STEPS):
             return picked  # no more windows to show
         i = max(i, 0)

@@ -52,4 +52,11 @@ def pointer_scale():
 def pointer_grid(points, scale):
     """Cells across a window `points` wide (its longer side) so each is about pointer-sized,
     kept between MIN_GRID and MAX_POINTER_GRID."""
-    return max(MIN_GRID, min(MAX_POINTER_GRID, round(points / (POINTER_PT * scale))))
+    return cell_grid(points, POINTER_PT * scale)
+
+
+def cell_grid(points, cell):
+    """Cells across a window `points` wide (its longer side) so each is about `cell` points,
+    kept between MIN_GRID and MAX_POINTER_GRID (so tiny cells on a big screen stay a bit
+    bigger than asked, to spare the CPU)."""
+    return max(MIN_GRID, min(MAX_POINTER_GRID, round(points / cell)))

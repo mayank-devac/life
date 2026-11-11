@@ -26,9 +26,9 @@ from pygame._sdl2.video import Renderer
 
 from . import patterns, settings
 from .colors import THEMES, parse_color
-from .config import (CLEAR_BG, CLICKABLE_BG, HIDDEN_WAIT, HOVER_IDLE, MAX_WAIT, MONITOR_GRACE, PINNED_WAIT,
+from .config import (CLEAR_BG, CLICKABLE_BG, HIDDEN_WAIT, HOVER_IDLE, HOVER_ZOOM, MAX_WAIT, MONITOR_GRACE, PINNED_WAIT,
                      SAVE_DIR, SCREEN_POLL, SOLID_BG, SPEEDS, SYSTEM_POLL)
-from .pointer import pointer_grid, pointer_scale
+from .pointer import cell_grid, pointer_grid, pointer_scale
 from .render import Painter
 from .rules import next_preset, parse_rule
 from .view import View
@@ -96,8 +96,9 @@ class LifeInLife:
         px_w, px_h = self.renderer.get_viewport().size
         self.painter = Painter(self.renderer, px_w / size[0])
         self.dt = 1 / max(1, args.fps)
-        if args.grid is None:  # no --grid: cells about the size of the mouse pointer
-            args.grid = pointer_grid(max(size), pointer_scale())
+        if args.grid is None:  # no --grid: the chosen cell size, or the mouse pointer's
+            args.grid = (cell_grid(max(size), args.cell) if args.cell
+                         else pointer_grid(max(size), pointer_scale()))
         self.world = World(args.grid, args.color, rule=args.rule, inner_rule=args.inner_rule,
                            wrap=args.edges == "wrap", effects=not args.no_effects)
         self.set_speed(args.speed)
@@ -436,9 +437,12 @@ class LifeInLife:
             except pygame.error:
                 pass  # still seen on the next wake-up, at most MAX_WAIT later
 
+        cell = self._points() / self.world.size
+
         def ask():
             picked = settings.choose(color, monitor, speed, mode, size,
-                                     progress=lambda text: tell("toast", text), hover=hover)
+                                     progress=lambda text: tell("toast", text), hover=hover,
+                                     cell=cell)
             if picked is None:
                 tell("toast", None)  # cancelled
             else:
@@ -492,17 +496,43 @@ class LifeInLife:
                     # Normal window: move it over to that monitor, at the chosen size. Coming
                     # out of wallpaper mode, it starts in the monitor's middle.
                     self._center_on(target, size, middle=switching)
+        cell = picked.get("cell")
+        if cell:
+            self.set_grid(cell_grid(self._points(), cell))
         self.painter.invalidate()
         try:
             speed_text = settings.speed_text(self.speed)
             settings.save(color=color_name, speed=speed_text, monitor=monitor, mode=mode, size=size,
-                          hover="on" if self.hover else "off")
+                          cell=cell, hover="on" if self.hover else "off")
             shown = "wallpaper" if mode == settings.WALLPAPER else f"window {size}pt"
             if self.hover:
                 shown += "  -  hover"
             self.toast(f"Colour {color_name}  -  {speed_text}/s  -  {shown}  -  monitor {monitor}", 2.5)
         except OSError as exc:
             self.toast(f"Applied, but couldn't save it ({exc.strerror})", 3.5)
+
+    def _points(self):
+        """The window's longer side, in points (the grid spans that side)."""
+        return max(self.window.size)
+
+    def set_grid(self, grid):
+        """A different number of cells across (the Cell size slider): a new world that size,
+        with the same settings and the current pattern centred in it (cropped if smaller)."""
+        old = self.world
+        if grid == old.size:
+            return
+        world = World(grid, old.color, rule=old.rule, inner_rule=old.inner_rule, wrap=old.wrap,
+                      macro_every=old.macro_every, effects=old.effects)
+        world.reseed_when_settled = old.reseed_when_settled
+        if old.population:
+            world.load(old.macro.astype(bool))
+        elif not old.reseed_when_settled:
+            world.clear()  # hover mode on an empty world: stays empty
+        px_w, px_h = self.renderer.get_viewport().size
+        zoom = self.view.zoom
+        self.world, self.view = world, View(px_w, px_h, grid)
+        self.view.zoom_at(zoom, px_w / 2, px_h / 2)
+        self.painter.invalidate()
 
     def _become_wallpaper(self):
         """Switch from a window to wallpaper mode: pinned, covering the chosen monitor (the
@@ -578,6 +608,9 @@ class LifeInLife:
         self.hover = on
         self.hover_last = None
         self.world.reseed_when_settled = not on
+        if on and self.view.target_zoom < HOVER_ZOOM:
+            # zoom in far enough to see the inner life of the cells the mouse wakes up
+            self.view.zoom_smooth(HOVER_ZOOM / self.view.target_zoom, self.view.w / 2, self.view.h / 2)
         if on and clear:
             if self.world.population:
                 self.world.checkpoint()  # step back brings the old world back

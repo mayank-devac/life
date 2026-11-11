@@ -29,6 +29,7 @@ FLASH = 0.5            # newborns are mixed this far towards white for one gener
 # ---------------------------------------------------------------- view
 DETAIL_ZOOM = 2.2      # zoom level where the inner grids become visible
 MIN_ZOOM, MAX_ZOOM = 1.0, 8.0
+HOVER_ZOOM = 3.0       # hover mode zooms in at least this far, so the inner life shows
 ZOOM_EASE = 14.0       # smooth zoom: how fast it closes in on the target (1/s)
 CLICK_SLOP = 4         # points the mouse may move and still count as a click (not a pan)
 SAVE_DIR = "~/life-worlds"  # where Ctrl+Shift+X saves the world as .rle
