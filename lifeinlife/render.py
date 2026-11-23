@@ -4,6 +4,9 @@ import pygame
 from pygame._sdl2.video import Texture
 
 from .config import DETAIL_ZOOM, HELP, OUTLINE_ALPHA, TEXT, TEXT_DIM
+from .world import _core
+
+TEX_STEP = 256  # the inner-world texture grows in steps of this many pixels, never shrinks
 
 
 def cells_surface(world):
@@ -36,6 +39,7 @@ class Painter:
         self.cells_tex = None   # the outer world as one texture, one texel per cell
         self.cells_gen = None   # world.generation that cells_tex shows
         self.inner_tex = None   # the inner worlds on screen, updated in place every frame
+        self.inner_buf = None   # their pixels (C core): reused every frame, grows when needed
         self.drawn_state = None  # what the last frame showed; same again -> skip drawing
         self.set_dpr(dpr)
 
@@ -146,18 +150,22 @@ class Painter:
         r0, r1, c0, c1 = region = v.visible_cells()
         if r1 <= r0 or c1 <= c0:
             return
-        pixels = inner_pixels(world, region)
-        h, w = pixels.shape[:2]
-        surf = pygame.image.frombuffer(pixels.tobytes(), (w, h), "RGBA")
-        if self.inner_tex is None or (self.inner_tex.width, self.inner_tex.height) != (w, h):
-            self.inner_tex = Texture.from_surface(ren, surf)
-            self.inner_tex.blend_mode = pygame.BLENDMODE_BLEND
-        else:
-            self.inner_tex.update(surf)
+        surf = self._inner_surface(world, region)
+        w, h = surf.get_size()
+        tex = self.inner_tex
+        if tex is None or tex.width < w or tex.height < h:
+            # One texture, big enough for any view so far: zooming or panning only updates
+            # part of it, instead of making (and leaking GPU memory on) a new one per frame.
+            side = -(-max(w, h, 1) // TEX_STEP) * TEX_STEP
+            side = max(side, tex.width if tex is not None else 0)
+            tex = self.inner_tex = Texture(ren, (side, side), streaming=True)
+            tex.blend_mode = pygame.BLENDMODE_BLEND
+        tex.update(surf, (0, 0, w, h))
         cell, m = v.cell, world.micro_size
         nudge = 1 / 64  # see _draw_cells
         x0, y0 = v.ox + c0 * cell, v.oy + r0 * cell
-        self.inner_tex.draw(dstrect=(x0 - nudge, y0 - nudge, (c1 - c0) * cell, (r1 - r0) * cell))
+        tex.draw(srcrect=(0, 0, w, h),
+                 dstrect=(x0 - nudge, y0 - nudge, (c1 - c0) * cell, (r1 - r0) * cell))
 
         # Gaps: between outer cells as zoomed out, and between inner cells once they're
         # big enough for a line not to swallow them (1/8 of an inner cell, like a grid).
@@ -193,6 +201,22 @@ class Painter:
         for x, y, (r, g, b) in zip(xs, ys, colors):
             ren.draw_color = (r, g, b, OUTLINE_ALPHA)
             ren.draw_rect((x, y, side, side))
+
+    def _inner_surface(self, world, region):
+        """The inner worlds in `region` as a surface. With the C core it's written straight
+        into one reused buffer (the surface shares it, no copies); without, numpy."""
+        r0, r1, c0, c1 = region
+        m = world.micro_size
+        need = (r1 - r0) * m * (c1 - c0) * m * 4
+        if _core is None or not world.inner.flags.c_contiguous:
+            pixels = inner_pixels(world, region)
+            h, w = pixels.shape[:2]
+            return pygame.image.frombuffer(pixels.tobytes(), (w, h), "RGBA")
+        if self.inner_buf is None or len(self.inner_buf) < need:
+            self.inner_buf = bytearray(need)
+        rgba = np.ascontiguousarray(world.rgba())
+        w, h = _core.inner_pixels(self.inner_buf, rgba, world.inner, world.size, m, tuple(region))
+        return pygame.image.frombuffer(memoryview(self.inner_buf)[:w * h * 4], (w, h), "BGRA")
 
     # ---- overlays
     def _draw_brush(self, cells, view):

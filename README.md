@@ -67,9 +67,15 @@ also uses the installed `life` if there is one, instead of copying the code.
 
 ```sh
 pip install -r requirements.txt
+python setup.py build_ext --inplace        # optional: build the C core (less RAM, faster)
 python "life inside life.py"               # transparent floating window
 python "life inside life.py" --wallpaper    # live wallpaper behind desktop icons (macOS)
 ```
+
+**C core:** the per-frame inner-world work (stepping, inheriting, building the zoomed-in
+image) runs in `lifeinlife/_core.c`, in place, with no temporary arrays. `pipx` / `uv` / `pip install`
+build it automatically (on macOS it needs the Xcode command line tools: `xcode-select --install`).
+Without a C compiler it still installs and runs, on the slower numpy version.
 
 ## Live wallpaper
 
@@ -187,7 +193,8 @@ lifeinlife/
   config.py              constants: sizes, speeds, colours, help text
   colors.py              --color parsing, hue -> RGB
   settings.py            Ctrl+Shift+S dialog, saved colour / monitor
-  world.py               the simulation (numpy only, no pygame)
+  world.py               the simulation (numpy, no pygame)
+  _core.c                its per-frame hot path in C, in place (optional, numpy fallback)
   rules.py               Life-like rules (B3/S23 notation), presets, stepping
   patterns.py            brushes (glider, gun...), .rle / .cells reading and writing
   view.py                zoom / pan / resize maths

@@ -72,7 +72,13 @@ SIZE_EVENTS = {getattr(pygame, name) for name in
 
 class LifeInLife:
     def __init__(self, args):
-        pygame.init()
+        # Only what's used: pygame.init() would also start audio (CoreAudio threads and
+        # buffers on macOS) and joysticks, which cost memory and are never used.
+        pygame.display.init()
+        try:
+            pygame.font.init()
+        except (NotImplementedError, ImportError, pygame.error):
+            pass  # Painter reports it and turns on-screen text off
         self.WAKE = pygame.event.custom_type()  # posted by global hotkeys to end a wait early
         self.wallpaper_mode = args.wallpaper
         self.monitor = args.monitor

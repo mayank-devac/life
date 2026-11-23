@@ -17,3 +17,8 @@ __pycache__/
 # Colour / monitor picked with Ctrl+Shift+S or ./login.sh
 settings
 settings.tmp
+
+# Built C core (python setup.py build_ext --inplace)
+build/
+lifeinlife/_core*.so
+lifeinlife/_core*.pyd

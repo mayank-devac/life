@@ -1,5 +1,6 @@
 """The simulation: an outer Game of Life whose every cell holds its own inner Game of Life.
-Pure numpy, no pygame, so it can be tested and reasoned about on its own."""
+numpy, no pygame, so it can be tested and reasoned about on its own. The per-frame
+inner-world work runs in C (_core.c) when it's built, numpy otherwise."""
 from collections import deque
 
 import numpy as np
@@ -9,6 +10,13 @@ from .config import (AGE_DIM, AGE_FULL, DENSITY, FLASH, HISTORY, INNER_DENSITY, 
                      MACRO_EVERY, MICRO_SIZE, MUTATION, REWIND, STALE_STEPS, TRAIL_ALPHA,
                      TRAIL_DECAY, TRAIL_MIN)
 from .rules import CONWAY, OFFSETS, neighbor_sum, step
+
+try:  # the per-frame inner-world work in C, in place (see _core.c); numpy if it isn't built
+    from . import _core
+except ImportError:
+    _core = None
+
+INNER_THRESHOLD = round(INNER_DENSITY * 256)  # random byte below this = alive
 
 __all__ = ["World", "neighbor_sum", "step_life", "step_colored", "random_grid", "random_inner"]
 
@@ -42,7 +50,7 @@ def random_grid(size, density=DENSITY):
 def random_inner(count, m=MICRO_SIZE):
     """`count` random inner worlds, shape (count, m, m)."""
     # Random bytes instead of float64s: 8x less memory churn (matters for 144*144 worlds).
-    return (np.random.randint(0, 256, (count, m, m), dtype=np.uint8) < round(INNER_DENSITY * 256)).astype(np.uint8)
+    return (np.random.randint(0, 256, (count, m, m), dtype=np.uint8) < INNER_THRESHOLD).astype(np.uint8)
 
 
 def find_parents(old, rows, cols, wrap=True):
@@ -309,7 +317,18 @@ class World:
         self.tick += 1
         return settled
 
+    def _core_ok(self):
+        """The C core is built and can work on these arrays in place."""
+        return (_core is not None and self.inner.dtype == np.uint8 and self.inner.flags.c_contiguous
+                and self.macro.dtype == np.uint8 and self.macro.flags.c_contiguous)
+
     def _step_inner(self, region):
+        if self._core_ok():
+            # In place, no temporaries: the numpy version below allocates several copies of
+            # every on-screen inner world each frame.
+            _core.step_inner(self.inner, self.macro, self.size, self.micro_size, tuple(region),
+                             *self.inner_rule.masks, INNER_THRESHOLD)
+            return
         r0, r1, c0, c1 = region
         sub = self.inner[r0:r1, c0:c1]  # a view: writing to it writes self.inner
         idx = np.nonzero(self.macro[r0:r1, c0:c1])
@@ -362,6 +381,13 @@ class World:
 
     def _inherit_inner(self, old, born):
         """Each newborn copies one parent's inner world, with a few cells flipped."""
+        if self._core_ok() and old.dtype == np.uint8 and old.flags.c_contiguous:
+            # In place. The numpy version below makes a float64 per inner cell of every
+            # newborn (~10 MB per outer step on a 144 x 144 grid).
+            _core.inherit_inner(self.inner, old, np.ascontiguousarray(born).view(np.uint8),
+                                self.size, self.micro_size, self.wrap, INNER_THRESHOLD,
+                                round(INNER_MUTATION * 65536))
+            return
         rows, cols = np.nonzero(born)
         pr, pc = find_parents(old, rows, cols, self.wrap)
         has = pr >= 0

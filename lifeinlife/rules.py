@@ -18,6 +18,11 @@ class Rule(NamedTuple):
         return f"B{''.join(map(str, sorted(self.birth)))}/S{''.join(map(str, sorted(self.survive)))}"
 
     @property
+    def masks(self):
+        """(birth, survive) as bit masks (bit n set = n neighbours), for the C core."""
+        return sum(1 << n for n in self.birth), sum(1 << n for n in self.survive)
+
+    @property
     def table(self):
         """table[alive, neighbours] -> next state, for numpy fancy indexing."""
         t = np.zeros((2, 9), dtype=np.uint8)
