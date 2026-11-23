@@ -1,6 +1,7 @@
 """The simulation: an outer Game of Life whose every cell holds its own inner Game of Life.
 numpy, no pygame, so it can be tested and reasoned about on its own. The per-frame
 inner-world work runs in C (_core.c) when it's built, numpy otherwise."""
+import zlib
 from collections import deque
 
 import numpy as np
@@ -234,13 +235,19 @@ class World:
         if self.rewind and self.rewind[-1]["age"] == self.age \
                 and np.array_equal(self.rewind[-1]["macro"], packed):
             return  # nothing changed since the last one
-        # Compact: ~85 KB per snapshot on a 144 x 144 grid. Inner worlds aren't kept
-        # (they'd be 256x bigger); they carry on as they are.
+        # Compact: hues only of the cells you can see (alive or fading: a dead cell's hue is
+        # replaced from its parents when it's born again), and the rest zlib-compressed.
+        # ~15-25 KB per snapshot on a 144 x 144 grid instead of 85 KB. Inner worlds aren't
+        # kept (they'd be 256x bigger); they carry on as they are.
+        ghost = (self.ghost * 255).astype(np.uint8)
+        parts = [np.minimum(self.alive_for, 255).astype(np.uint8).tobytes(), ghost.tobytes()]
+        if self.hue is not None:
+            seen = (self.macro == 1) | (ghost > 0)
+            parts.append((self.hue[seen] * 65535).astype(np.uint16).tobytes())
         self.rewind.append({
             "macro": packed,
-            "hue": None if self.hue is None else (self.hue * 65535).astype(np.uint16),
-            "alive_for": np.minimum(self.alive_for, 255).astype(np.uint8),
-            "ghost": (self.ghost * 255).astype(np.uint8),
+            "rest": zlib.compress(b"".join(parts), 1),
+            "has_hue": self.hue is not None,
             "age": self.age,
             "cleared": self.cleared,
         })
@@ -255,12 +262,16 @@ class World:
             return False
         snap = self.rewind.pop()
         n = self.size * self.size
-        self.macro = np.unpackbits(snap["macro"], count=n).reshape(self.size, self.size)
-        self.alive_for = snap["alive_for"].astype(np.uint16)
-        self.ghost = snap["ghost"].astype(np.float32) / 255
+        shape = (self.size, self.size)
+        rest = zlib.decompress(snap["rest"])
+        self.macro = np.unpackbits(snap["macro"], count=n).reshape(shape)
+        self.alive_for = np.frombuffer(rest, np.uint8, n).reshape(shape).astype(np.uint16)
+        ghost = np.frombuffer(rest, np.uint8, n, n).reshape(shape)
+        self.ghost = ghost.astype(np.float32) / 255
         self.age, self.cleared = snap["age"], snap["cleared"]
-        if snap["hue"] is not None and self.hue is not None:
-            self.hue = snap["hue"].astype(np.float64) / 65535
+        if snap["has_hue"] and self.hue is not None:
+            seen = (self.macro == 1) | (ghost > 0)
+            self.hue[seen] = np.frombuffer(rest, np.uint16, offset=2 * n).astype(np.float64) / 65535
             self.rgb = colorize(self.hue, self.color)
         self.tick = 1  # the next outer step is a full interval away
         self._forget_history()

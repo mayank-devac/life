@@ -160,6 +160,27 @@ class Rewind(unittest.TestCase):
             self.assertEqual(w.age, age)
         self.assertFalse(w.step_back())
 
+    def test_step_back_restores_what_you_see(self):
+        np.random.seed(3)
+        w = World(24)
+        for _ in range(3):
+            w._step_macro()
+        before = w.rgba().copy(), w.alive_for.copy(), w.ghost.copy()
+        for _ in range(5):
+            w._step_macro()
+        for _ in range(5):
+            w.step_back()
+        np.testing.assert_array_equal(w.alive_for, np.minimum(before[1], 255))
+        np.testing.assert_allclose(w.ghost, before[2], atol=1 / 255)
+        visible = before[0][..., 3] > 3
+        np.testing.assert_allclose(w.rgba()[visible].astype(int), before[0][visible].astype(int), atol=2)
+
+    def test_snapshots_are_small(self):
+        w = World(144)
+        w._step_macro()
+        snap = w.rewind[-1]
+        self.assertLess(len(snap["macro"]) + len(snap["rest"]), 40_000)  # was ~85 KB
+
     def test_keeps_only_the_last_few_hundred(self):
         w = World(12)
         w.clear()
