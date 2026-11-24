@@ -370,9 +370,11 @@ def restart_life():
 
 def relaunch_menubar():
     """Replace this menu bar process with a fresh one, so the icon runs the new code too.
-    Same pid, so run_menubar's one-at-a-time check lets it through."""
-    os.execv(sys.executable,
-             [sys.executable, "-c", "from lifeinlife.cli import main; main()", "--menubar"])
+    A new process, not os.execv: macOS keeps the old icon's slot for the same pid and shows
+    it empty. Drop the pid file first so the new one's one-at-a-time check lets it through."""
+    MENUBAR_FILE.unlink(missing_ok=True)
+    _background(["--menubar"])
+    os._exit(0)
 
 
 def open_from_app():
@@ -402,7 +404,8 @@ def run_menubar():
                 can_upgrade=lambda: upgrade_command() is not None, upgrade=upgrade_life,
                 restart=restart_life, relaunch=relaunch_menubar).run()
     finally:
-        MENUBAR_FILE.unlink(missing_ok=True)
+        if settings.live_pid(MENUBAR_FILE) == os.getpid():  # not a newer icon's file
+            MENUBAR_FILE.unlink(missing_ok=True)
 
 
 def run_login(commands):

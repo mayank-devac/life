@@ -128,6 +128,7 @@ class MenuBar:
             self.restart()
         self._alert("Life in Life is up to date",
                     "Upgraded. Life in Life was restarted on the new version if it was running.")
+        AppKit.NSStatusBar.systemStatusBar().removeStatusItem_(self.item)  # before the new one
         self.relaunch()
 
     def _alert(self, title, text):
