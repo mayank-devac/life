@@ -346,6 +346,45 @@ def upgrade_command():
     return None
 
 
+REPO = "mayank-devac/life"  # where upgrades come from (pyproject.toml's Homepage)
+LATEST_PYPROJECT = f"https://raw.githubusercontent.com/{REPO}/main/pyproject.toml"
+
+
+def _version_in(pyproject_text):
+    import tomllib  # noqa: PLC0415 - only needed here
+    return tomllib.loads(pyproject_text)["project"]["version"]
+
+
+def current_version():
+    """This copy's version: from pyproject.toml in a clone (git pull changes it there), else
+    from the installed package's metadata. None if neither says."""
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    try:
+        if pyproject.is_file():
+            return _version_in(pyproject.read_text())
+        from importlib.metadata import version  # noqa: PLC0415
+        return version("lifeinlife")
+    except Exception:  # noqa: BLE001 - unknown just means "don't show it"
+        return None
+
+
+def latest_version():
+    """The version on GitHub's main branch, or None if it can't be fetched."""
+    from urllib.request import urlopen  # noqa: PLC0415
+    try:
+        with urlopen(LATEST_PYPROJECT, timeout=10) as reply:
+            return _version_in(reply.read().decode())
+    except Exception:  # noqa: BLE001 - offline, GitHub down, file changed shape...
+        return None
+
+
+def is_newer(latest, current):
+    """True if version `latest` is after `current` ("1.0.10" > "1.0.9")."""
+    def parts(v):
+        return tuple(int(p) if p.isdigit() else 0 for p in v.split("."))
+    return parts(latest) > parts(current)
+
+
 def upgrade_life():
     """Run upgrade_command(). Returns (ok, output)."""
     command = upgrade_command()
@@ -402,6 +441,7 @@ def run_menubar():
         MenuBar(is_running=lambda: running_pid() is not None, start=start_life,
                 stop=stop_life, settings=show_settings,
                 can_upgrade=lambda: upgrade_command() is not None, upgrade=upgrade_life,
+                versions=lambda: (current_version(), latest_version()), is_newer=is_newer,
                 restart=restart_life, relaunch=relaunch_menubar).run()
     finally:
         if settings.live_pid(MENUBAR_FILE) == os.getpid():  # not a newer icon's file

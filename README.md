@@ -54,9 +54,10 @@ in `~/Applications`, so after closing it (Ctrl+Shift+Esc) you can start it again
 its settings window (the same as `Ctrl+Shift + S`).
 
 Opening the app also puts a **menu bar icon** (a little grid) at the top of the screen, with
-**Start**, **Stop**, **Settings…**, **Upgrade** and **Quit** (stops Life and removes the icon).
-It stays there while Life is stopped, so you can start it again from it. **Upgrade** fetches the
-latest version (with pipx or uv, or `git pull` in a clone) and restarts Life on it. Without the app: `life --menubar`.
+**Start**, **Stop**, **Settings…**, **Upgrade…** and **Quit** (stops Life and removes the icon).
+It stays there while Life is stopped, so you can start it again from it. **Upgrade…** shows your
+version and the latest one on GitHub, updates with one click (pipx, uv, or `git pull` in a clone)
+and restarts Life and the icon on the new version. Without the app: `life --menubar`.
 To have both at every login, add *Life in Life* in System Settings → General → Login Items.
 
 Update from the menu bar icon's **Upgrade**, or with `pipx reinstall lifeinlife` (or

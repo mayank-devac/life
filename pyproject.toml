@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lifeinlife"
-version = "1.0.1"
+version = "1.0.2"
 description = "Conway's Game of Life where every live cell holds another Game of Life, as a window or a live macOS wallpaper."
 readme = "README.md"
 requires-python = ">=3.10"
