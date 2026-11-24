@@ -54,11 +54,14 @@ in `~/Applications`, so after closing it (Ctrl+Shift+Esc) you can start it again
 its settings window (the same as `Ctrl+Shift + S`).
 
 Opening the app also puts a **menu bar icon** (a little grid) at the top of the screen, with
-**Start**, **Stop**, **Settings…** and **Quit** (stops Life and removes the icon). It stays
-there while Life is stopped, so you can start it again from it. Without the app: `life --menubar`.
+**Start**, **Stop**, **Settings…**, **Upgrade** and **Quit** (stops Life and removes the icon).
+It stays there while Life is stopped, so you can start it again from it. **Upgrade** fetches the
+latest version (with pipx or uv, or `git pull` in a clone) and restarts Life on it. Without the app: `life --menubar`.
 To have both at every login, add *Life in Life* in System Settings → General → Login Items.
 
-Update with `pipx upgrade lifeinlife` (or `uv tool upgrade lifeinlife`).
+Update from the menu bar icon's **Upgrade**, or with `pipx reinstall lifeinlife` (or
+`uv tool upgrade --reinstall-package lifeinlife lifeinlife`). The reinstall makes sure a git
+install picks up new commits even when the version number hasn't changed.
 
 `life --login …` takes the same commands as `./login.sh` below. From a clone, `./login.sh install`
 also uses the installed `life` if there is one, instead of copying the code.

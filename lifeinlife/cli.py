@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from .colors import NAMED_COLORS, THEMES, parse_color
@@ -322,6 +323,58 @@ def show_settings():
         os.kill(pid, signal.SIGUSR1)
 
 
+def _find_tool(name):
+    """`name` on PATH, or where Homebrew / pipx / uv usually put it: the app starts with a
+    bare PATH (/usr/bin:/bin), so a plain which() misses them."""
+    extra = ["/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / ".local" / "bin"),
+             str(Path.home() / ".cargo" / "bin")]
+    return shutil.which(name, path=os.pathsep.join([os.environ.get("PATH", ""), *extra]))
+
+
+def upgrade_command():
+    """The command that updates this copy to the latest version, or None if it can't tell
+    how this one was installed. Git installs need a reinstall: their version number doesn't
+    change, so a plain upgrade would think there's nothing new."""
+    prefix = Path(sys.prefix).resolve().parts
+    if prefix[-3:] == ("uv", "tools", "lifeinlife") and (uv := _find_tool("uv")):
+        return [uv, "tool", "upgrade", "--reinstall-package", "lifeinlife", "lifeinlife"]
+    if prefix[-3:] == ("pipx", "venvs", "lifeinlife") and (pipx := _find_tool("pipx")):
+        return [pipx, "reinstall", "lifeinlife"]
+    package_root = Path(__file__).resolve().parent.parent
+    if (package_root / ".git").exists() and (git := _find_tool("git")):
+        return [git, "-C", str(package_root), "pull", "--ff-only"]
+    return None
+
+
+def upgrade_life():
+    """Run upgrade_command(). Returns (ok, output)."""
+    command = upgrade_command()
+    if command is None:
+        return False, "Can't tell how Life in Life was installed, so it can't upgrade itself."
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return False, str(error)
+    return done.returncode == 0, (done.stdout + done.stderr).strip()
+
+
+def restart_life():
+    """Stop the running copy, wait for it to go, and start it again (on the new code)."""
+    stop_life()
+    for _ in range(50):
+        if running_pid() is None:
+            break
+        time.sleep(0.1)
+    start_life()
+
+
+def relaunch_menubar():
+    """Replace this menu bar process with a fresh one, so the icon runs the new code too.
+    Same pid, so run_menubar's one-at-a-time check lets it through."""
+    os.execv(sys.executable,
+             [sys.executable, "-c", "from lifeinlife.cli import main; main()", "--menubar"])
+
+
 def open_from_app():
     """What opening the Life in Life app does. Already running: show its settings window,
     like Ctrl+Shift+S. Otherwise start it. Either way, make sure the menu bar icon is there."""
@@ -345,7 +398,9 @@ def run_menubar():
     MENUBAR_FILE.write_text(str(os.getpid()))
     try:
         MenuBar(is_running=lambda: running_pid() is not None, start=start_life,
-                stop=stop_life, settings=show_settings).run()
+                stop=stop_life, settings=show_settings,
+                can_upgrade=lambda: upgrade_command() is not None, upgrade=upgrade_life,
+                restart=restart_life, relaunch=relaunch_menubar).run()
     finally:
         MENUBAR_FILE.unlink(missing_ok=True)
 
